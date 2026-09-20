@@ -1,0 +1,7 @@
+{
+  "files.associations": {
+    "AndroidManifest.xml": "xml",
+    "*.xml": "xml"
+  },
+  "cmake.sourceDirectory": "C:/Users/User/Smart-Traffic-Control-and-Emergency-Preemption-System-/windows/flutter"
+}

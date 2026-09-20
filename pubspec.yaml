@@ -39,6 +39,8 @@ dependencies:
   badges: ^3.2.0
   google_fonts: ^8.2.1
   flutter_iconly_plus: ^1.0.1
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
 
 dev_dependencies:
   flutter_test:
