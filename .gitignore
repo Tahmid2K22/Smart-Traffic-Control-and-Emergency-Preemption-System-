@@ -46,3 +46,12 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Environment variables and keys
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+key.properties
+
