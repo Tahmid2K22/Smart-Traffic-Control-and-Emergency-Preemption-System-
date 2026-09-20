@@ -41,11 +41,9 @@ dependencies:
   flutter_iconly_plus: ^1.0.1
   firebase_core: ^4.15.0
   firebase_auth: ^6.7.0
-<<<<<<< HEAD
-=======
   cloud_firestore: ^6.10.0
   shared_preferences: ^2.5.5
->>>>>>> f4a548434ce5752b8110dc186d6d8e2a0e90e0ad
+  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:
