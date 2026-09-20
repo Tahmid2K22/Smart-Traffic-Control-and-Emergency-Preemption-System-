@@ -1,4 +1,4 @@
-name: E-Ambulance
+name: e_ambulance
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -39,6 +39,10 @@ dependencies:
   badges: ^3.2.0
   google_fonts: ^8.2.1
   flutter_iconly_plus: ^1.0.1
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
+  cloud_firestore: ^6.10.0
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:

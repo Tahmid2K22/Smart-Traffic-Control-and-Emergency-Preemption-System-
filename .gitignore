@@ -54,6 +54,16 @@ app.*.map.json
 *.jks
 *.keystore
 key.properties
+android/key.properties
+
+# Firebase Secrets
+lib/firebase_options.dart
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+macos/Runner/GoogleService-Info.plist
+firebase-debug.log
+firebase-debug.*.log
+firebase.json
 
 # AI / Assistant rules & configurations
 GEMINI.md
