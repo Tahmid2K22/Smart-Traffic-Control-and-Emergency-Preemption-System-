@@ -275,7 +275,7 @@ class HomePage extends StatelessWidget {
         icon: Icons.medication_rounded,
         label: 'Pharmacy',
         color: const Color(0xFFFF6F00),
-        subtitle: 'Order Medicine',
+        subtitle: 'Nearby',
       ),
       ServiceItem(
         icon: Icons.business_rounded,

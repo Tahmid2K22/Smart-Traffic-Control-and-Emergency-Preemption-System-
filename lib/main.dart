@@ -1,13 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'firebase_options.dart';
 
 import 'constants/colors.dart';
 import 'pages/home_page.dart';
 import 'pages/activity_page.dart';
 import 'pages/profile_page.dart';
+import 'pages/login_page.dart';
 
-void main() => runApp(const AmbulanceApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  runApp(const AmbulanceApp());
+}
 
 class AmbulanceApp extends StatelessWidget {
   const AmbulanceApp({super.key});
@@ -23,7 +33,27 @@ class AmbulanceApp extends StatelessWidget {
         colorSchemeSeed: AppColors.primary,
         useMaterial3: true,
       ),
-      home: const DashboardPage(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        // User is not signed in
+        if (!snapshot.hasData) {
+          return const LoginPage();
+        }
+
+        // User is signed in
+        return const DashboardPage();
+      },
     );
   }
 }

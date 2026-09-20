@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:velocity_x/velocity_x.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/colors.dart';
+import '../constants/districts.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -12,18 +16,15 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   // user data
-  String _name = 'Tahmid Chowdhury';
-  String _email = 'tahmid.chowdhury@email.com';
-  String _phone = '+880 1712-345678';
-  String _bloodGroup = 'O+';
-  String _address = 'Khulna, Bangladesh';
+  String _name = 'Loading...';
+  String _email = 'Loading...';
+  String _phone = 'Loading...';
+  String? _city;
 
   // text controllers
   late TextEditingController _nameCtrl;
   late TextEditingController _emailCtrl;
   late TextEditingController _phoneCtrl;
-  late TextEditingController _bloodCtrl;
-  late TextEditingController _addressCtrl;
 
   @override
   void initState() {
@@ -31,8 +32,22 @@ class _ProfilePageState extends State<ProfilePage> {
     _nameCtrl = TextEditingController(text: _name);
     _emailCtrl = TextEditingController(text: _email);
     _phoneCtrl = TextEditingController(text: _phone);
-    _bloodCtrl = TextEditingController(text: _bloodGroup);
-    _addressCtrl = TextEditingController(text: _address);
+    _loadUserData();
+  }
+
+  Future<void> _loadUserData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _name = prefs.getString('userName') ?? 'No Name';
+      _email = prefs.getString('userEmail') ?? 'No Email';
+      _phone = prefs.getString('userPhone') ?? 'No Phone';
+      _city = prefs.getString('userCity');
+      
+      // Update controllers as well
+      _nameCtrl.text = _name;
+      _emailCtrl.text = _email;
+      _phoneCtrl.text = _phone;
+    });
   }
 
   @override
@@ -40,8 +55,6 @@ class _ProfilePageState extends State<ProfilePage> {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
     _phoneCtrl.dispose();
-    _bloodCtrl.dispose();
-    _addressCtrl.dispose();
     super.dispose();
   }
 
@@ -167,36 +180,6 @@ class _ProfilePageState extends State<ProfilePage> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  8.heightBox,
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.verified_rounded,
-                          size: 12,
-                          color: Colors.white,
-                        ),
-                        4.widthBox,
-                        Text(
-                          'Verified Account',
-                          style: GoogleFonts.poppins(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -257,15 +240,9 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
                 _divider(),
                 _infoRow(
-                  icon: Icons.bloodtype_outlined,
-                  label: 'Blood Group',
-                  value: _bloodGroup,
-                ),
-                _divider(),
-                _infoRow(
-                  icon: Icons.location_on_outlined,
-                  label: 'Address',
-                  value: _address,
+                  icon: Icons.location_city_outlined,
+                  label: 'City',
+                  value: _city ?? 'Not set',
                   isLast: true,
                 ),
               ],
@@ -400,108 +377,150 @@ class _ProfilePageState extends State<ProfilePage> {
     _nameCtrl.text = _name;
     _emailCtrl.text = _email;
     _phoneCtrl.text = _phone;
-    _bloodCtrl.text = _bloodGroup;
-    _addressCtrl.text = _address;
+    String? tempCity = _city;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Container(
-          decoration: const BoxDecoration(
-            color: AppColors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // handle
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.cardBorder,
-                    borderRadius: BorderRadius.circular(2),
+      builder: (BuildContext bottomSheetContext) => StatefulBuilder(
+        builder: (BuildContext context, StateSetter setModalState) {
+          return Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: Container(
+              decoration: const BoxDecoration(
+                color: AppColors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // handle
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: AppColors.cardBorder,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              20.heightBox,
-              Text(
-                'Update Profile',
-                style: GoogleFonts.poppins(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textDark,
-                ),
-              ),
-              4.heightBox,
-              Text(
-                'Edit your personal information below',
-                style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
-              ),
-              20.heightBox,
-              _editField(
-                controller: _nameCtrl,
-                label: 'Full Name',
-                icon: Icons.person_outline_rounded,
-              ),
-              12.heightBox,
-              _editField(
-                controller: _phoneCtrl,
-                label: 'Phone Number',
-                icon: Icons.phone_outlined,
-                inputType: TextInputType.phone,
-              ),
-              12.heightBox,
-              _editField(
-                controller: _emailCtrl,
-                label: 'Email Address',
-                icon: Icons.email_outlined,
-                inputType: TextInputType.emailAddress,
-              ),
-              12.heightBox,
-              _editField(
-                controller: _bloodCtrl,
-                label: 'Blood Group',
-                icon: Icons.bloodtype_outlined,
-              ),
-              12.heightBox,
-              _editField(
-                controller: _addressCtrl,
-                label: 'Address',
-                icon: Icons.location_on_outlined,
-              ),
-              24.heightBox,
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: () {
-                    setState(() {
-                      _name = _nameCtrl.text.trim().isEmpty
-                          ? _name
-                          : _nameCtrl.text.trim();
-                      _email = _emailCtrl.text.trim().isEmpty
-                          ? _email
-                          : _emailCtrl.text.trim();
-                      _phone = _phoneCtrl.text.trim().isEmpty
-                          ? _phone
-                          : _phoneCtrl.text.trim();
-                      _bloodGroup = _bloodCtrl.text.trim().isEmpty
-                          ? _bloodGroup
-                          : _bloodCtrl.text.trim();
-                      _address = _addressCtrl.text.trim().isEmpty
-                          ? _address
-                          : _addressCtrl.text.trim();
-                    });
-                    Navigator.pop(context);
+                  20.heightBox,
+                  Text(
+                    'Update Profile',
+                    style: GoogleFonts.poppins(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textDark,
+                    ),
+                  ),
+                  4.heightBox,
+                  Text(
+                    'Edit your personal information below',
+                    style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
+                  ),
+                  20.heightBox,
+                  _editField(
+                    controller: _nameCtrl,
+                    label: 'Full Name',
+                    icon: Icons.person_outline_rounded,
+                  ),
+                  12.heightBox,
+                  _editField(
+                    controller: _phoneCtrl,
+                    label: 'Phone Number',
+                    icon: Icons.phone_outlined,
+                    inputType: TextInputType.phone,
+                  ),
+                  12.heightBox,
+                  _editField(
+                    controller: _emailCtrl,
+                    label: 'Email Address',
+                    icon: Icons.email_outlined,
+                    inputType: TextInputType.emailAddress,
+                  ),
+                  12.heightBox,
+                  DropdownButtonFormField<String>(
+                    value: bdDistricts.contains(tempCity) ? tempCity : null,
+                    hint: Text(
+                      'Select City (District)',
+                      style: GoogleFonts.poppins(fontSize: 13),
+                    ),
+                    items: bdDistricts.map((String district) {
+                      return DropdownMenuItem<String>(
+                        value: district,
+                        child: Text(
+                          district,
+                          style: GoogleFonts.poppins(fontSize: 14),
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (String? newValue) {
+                      setModalState(() {
+                        tempCity = newValue;
+                      });
+                    },
+                    decoration: InputDecoration(
+                      labelText: 'City',
+                      prefixIcon: const Icon(Icons.location_city_outlined, color: AppColors.primary, size: 20),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppColors.textLight.withValues(alpha: 0.2)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppColors.textLight.withValues(alpha: 0.2)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: AppColors.primary, width: 1.5),
+                      ),
+                    ),
+                  ),
+                  24.heightBox,
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        // Get current user to update Firestore
+                        final user = FirebaseAuth.instance.currentUser;
+                        
+                        setState(() {
+                          _name = _nameCtrl.text.trim().isEmpty ? _name : _nameCtrl.text.trim();
+                          _email = _emailCtrl.text.trim().isEmpty ? _email : _emailCtrl.text.trim();
+                          _phone = _phoneCtrl.text.trim().isEmpty ? _phone : _phoneCtrl.text.trim();
+                          _city = tempCity ?? _city;
+                        });
+                        
+                        // Save locally
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('userName', _name);
+                        await prefs.setString('userEmail', _email);
+                        await prefs.setString('userPhone', _phone);
+                        if (_city != null) await prefs.setString('userCity', _city!);
+                        
+                        // Save to Firestore
+                        if (user != null) {
+                          try {
+                            await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+                              'name': _name,
+                              'email': _email,
+                              'phone': _phone,
+                              'city': _city,
+                            });
+                          } catch (e) {
+                            debugPrint('Failed to update Firestore: $e');
+                          }
+                        }
+                        
+                        if (mounted) Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
@@ -536,6 +555,8 @@ class _ProfilePageState extends State<ProfilePage> {
             ],
           ),
         ),
+      );
+        },
       ),
     );
   }
@@ -650,20 +671,10 @@ class _ProfilePageState extends State<ProfilePage> {
                 child: ElevatedButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    // TODO: wire up real auth logout here
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Logged out successfully.',
-                          style: GoogleFonts.poppins(fontSize: 13),
-                        ),
-                        backgroundColor: AppColors.primary,
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    );
+                    // Clear local user data
+                    SharedPreferences.getInstance().then((prefs) => prefs.clear());
+                    // Sign out — AuthGate will automatically redirect to LoginPage
+                    FirebaseAuth.instance.signOut();
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
