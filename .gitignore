@@ -55,3 +55,14 @@ app.*.map.json
 *.keystore
 key.properties
 
+# AI / Assistant rules & configurations
+GEMINI.md
+AGENTS.md
+CLAUDE.md
+COPILOT.md
+.agents/
+.agent/
+_agents/
+_agent/
+.claude/
+.gemini/
