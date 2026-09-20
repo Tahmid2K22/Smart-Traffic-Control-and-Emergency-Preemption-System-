@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:ambulance_dashboard/main.dart';
+import 'package:e_ambulance/main.dart';
 
 void main() {
   testWidgets('Dashboard renders smoke test', (WidgetTester tester) async {
