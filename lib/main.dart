@@ -3,6 +3,7 @@ import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 
 import 'constants/colors.dart';
@@ -10,6 +11,7 @@ import 'pages/home_page.dart';
 import 'pages/activity_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/login_page.dart';
+import 'pages/admin/admin_dashboard_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,13 +48,35 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        // User is not signed in
+        // Not signed in
         if (!snapshot.hasData) {
           return const LoginPage();
         }
 
-        // User is signed in
-        return const DashboardPage();
+        // Signed in → read role from Firestore to route correctly
+        final uid = snapshot.data!.uid;
+        return FutureBuilder<DocumentSnapshot>(
+          future: FirebaseFirestore.instance
+              .collection('users')
+              .doc(uid)
+              .get(),
+          builder: (context, roleSnap) {
+            if (roleSnap.connectionState == ConnectionState.waiting) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+
+            final data =
+                roleSnap.data?.data() as Map<String, dynamic>?;
+            final role = data?['role'] ?? 'user';
+
+            if (role == 'admin') {
+              return const AdminDashboardPage();
+            }
+            return const DashboardPage();
+          },
+        );
       },
     );
   }
