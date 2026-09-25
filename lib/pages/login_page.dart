@@ -74,10 +74,11 @@ class _LoginPageState extends State<LoginPage> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(
-                  Icons.local_hospital_rounded,
-                  size: 80,
-                  color: AppColors.primary,
+                Image.asset(
+                  'assets/e ambulance logo.png',
+                  width: 112,
+                  height: 112,
+                  fit: BoxFit.contain,
                 ),
                 const SizedBox(height: 24),
                 Text(

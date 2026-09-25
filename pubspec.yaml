@@ -44,6 +44,11 @@ dependencies:
   cloud_firestore: ^6.10.0
   shared_preferences: ^2.5.5
   image_picker: ^1.1.2
+  google_maps_flutter: ^2.18.1
+  url_launcher: ^6.3.2
+  geolocator: ^14.0.2
+  geocoding: ^5.0.0
+  flutter_polyline_points: ^2.1.0
 
 dev_dependencies:
   flutter_test:
@@ -61,6 +66,10 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+
+  assets:
+    - assets/map_style.json
+    - assets/e ambulance logo.png
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
