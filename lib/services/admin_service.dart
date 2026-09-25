@@ -11,7 +11,6 @@ class AdminService {
   Stream<QuerySnapshot> allDriversStream() => _firestore
       .collection('users')
       .where('role', isEqualTo: 'driver')
-      .orderBy('createdAt', descending: true)
       .snapshots();
 
   // only drivers waiting for approval
@@ -25,7 +24,6 @@ class AdminService {
   Stream<QuerySnapshot> allUsersStream() => _firestore
       .collection('users')
       .where('role', whereIn: ['user', 'admin'])
-      .orderBy('createdAt', descending: true)
       .snapshots();
 
   // approve driver
