@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:velocity_x/velocity_x.dart';
 import 'package:google_fonts/google_fonts.dart';
-
 import '../constants/colors.dart';
 import '../models/models.dart';
-import 'dispatch_map_page.dart';
 
 class ActivityPage extends StatefulWidget {
   const ActivityPage({super.key});
@@ -243,9 +241,7 @@ class _ActivityPageState extends State<ActivityPage>
                   color: isSelected ? AppColors.primary : AppColors.white,
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
-                    color: isSelected
-                        ? AppColors.primary
-                        : AppColors.cardBorder,
+                    color: isSelected ? AppColors.primary : AppColors.cardBorder,
                   ),
                   boxShadow: isSelected
                       ? [
@@ -306,10 +302,7 @@ class _ActivityPageState extends State<ActivityPage>
             8.heightBox,
             Text(
               'You have no bookings in this category',
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                color: AppColors.textGrey,
-              ),
+              style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
             ),
           ],
         ),
@@ -462,13 +455,14 @@ class _ActivityPageState extends State<ActivityPage>
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(
-                          item.amount > 0 ? 'BDT ${item.amount}' : 'No charge',
+                          item.amount > 0
+                              ? 'BDT ${item.amount}'
+                              : 'No charge',
                           style: GoogleFonts.poppins(
                             fontSize: 15,
                             fontWeight: FontWeight.w700,
-                            color: item.amount > 0
-                                ? AppColors.textDark
-                                : AppColors.textLight,
+                            color:
+                                item.amount > 0 ? AppColors.textDark : AppColors.textLight,
                           ),
                         ),
                         4.heightBox,
@@ -555,30 +549,21 @@ class _ActivityPageState extends State<ActivityPage>
                             ),
                           ),
                           const Spacer(),
-                          GestureDetector(
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => DispatchMapPage(ride: item),
-                                ),
-                              );
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: AppColors.primary,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                'Track',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.white,
-                                ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'Track',
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.white,
                               ),
                             ),
                           ),
