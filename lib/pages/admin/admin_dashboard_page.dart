@@ -1,8 +1,10 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:velocity_x/velocity_x.dart';
+import 'package:google_nav_bar/google_nav_bar.dart';
 import '../../constants/colors.dart';
 import '../../services/admin_service.dart';
 import 'drivers_management_page.dart';
@@ -17,7 +19,7 @@ class AdminDashboardPage extends StatefulWidget {
 
 class _AdminDashboardPageState extends State<AdminDashboardPage>
     with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+  int _selectedTab = 0;
   final _adminService = AdminService();
 
   String _adminName = 'Admin';
@@ -32,7 +34,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    super.initState();
     _loadAdminName();
     _loadStats();
   }
@@ -62,7 +64,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
 
   @override
   void dispose() {
-    _tabController.dispose();
     super.dispose();
   }
 
@@ -75,10 +76,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(),
-            _buildTabBar(),
             Expanded(
-              child: TabBarView(
-                controller: _tabController,
+              child: IndexedStack(
+                index: _selectedTab,
                 children: [
                   _buildOverviewTab(),
                   const DriversManagementPage(),
@@ -89,6 +89,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           ],
         ),
       ),
+      bottomNavigationBar: _buildBottomNav(),
     );
   }
 
@@ -145,6 +146,30 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   ],
                 ),
               ),
+              // add dummy driver (temporary)
+              IconButton(
+                onPressed: () async {
+                  await FirebaseFirestore.instance.collection('users').add({
+                    'name': 'Dummy Driver',
+                    'email': 'dummy@driver.com',
+                    'phone': '+8801900000000',
+                    'role': 'driver',
+                    'isApproved': false,
+                    'city': 'Khulna',
+                    'vehicleType': 'Basic Life Support',
+                    'vehicleNumber': 'KHU-DUMMY-123',
+                    'drivingLicense': 'DL-DUMMY-001',
+                    'createdAt': FieldValue.serverTimestamp(),
+                  });
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Dummy Driver Added!')),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.add_box_rounded, color: Colors.white),
+              ),
+              12.widthBox,
               // logout
               GestureDetector(
                 onTap: _showLogoutDialog,
@@ -168,38 +193,63 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // tab bar
-  Widget _buildTabBar() {
+  // bottom nav bar
+  Widget _buildBottomNav() {
     return Container(
-      color: AppColors.white,
-      child: TabBar(
-        controller: _tabController,
-        labelStyle: GoogleFonts.poppins(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-        ),
-        unselectedLabelStyle: GoogleFonts.poppins(
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-        ),
-        labelColor: AppColors.primary,
-        unselectedLabelColor: AppColors.textGrey,
-        indicatorColor: AppColors.primary,
-        indicatorWeight: 3,
-        tabs: const [
-          Tab(
-            icon: Icon(Icons.dashboard_rounded, size: 20),
-            text: 'Overview',
-          ),
-          Tab(
-            icon: Icon(Icons.local_taxi_rounded, size: 20),
-            text: 'Drivers',
-          ),
-          Tab(
-            icon: Icon(Icons.people_rounded, size: 20),
-            text: 'Users',
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, -2),
           ),
         ],
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: GNav(
+            gap: 8,
+            activeColor: AppColors.primary,
+            iconSize: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            duration: const Duration(milliseconds: 400),
+            tabBackgroundColor: AppColors.primaryLight,
+            color: AppColors.textLight,
+            tabs: [
+              GButton(
+                icon: Icons.dashboard_rounded,
+                text: 'Overview',
+                textStyle: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+              GButton(
+                icon: Icons.local_taxi_rounded,
+                text: 'Drivers',
+                textStyle: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+              GButton(
+                icon: Icons.people_rounded,
+                text: 'Users',
+                textStyle: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
+            selectedIndex: _selectedTab,
+            onTabChange: (index) => setState(() => _selectedTab = index),
+          ),
+        ),
       ),
     );
   }
@@ -372,7 +422,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
               ),
             ),
             TextButton(
-              onPressed: () => _tabController.animateTo(1),
+              onPressed: () => setState(() => _selectedTab = 1),
               child: Text(
                 'See All',
                 style: GoogleFonts.poppins(
@@ -623,15 +673,15 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
+    return IconButton(
+      onPressed: onTap,
+      icon: Icon(icon, size: 20),
+      style: IconButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Icon(icon, color: color, size: 22),
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:velocity_x/velocity_x.dart';
+
 import '../../constants/colors.dart';
 import '../../services/admin_service.dart';
 
@@ -52,8 +53,11 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.people_outline_rounded,
-              size: 64, color: AppColors.textLight),
+          Icon(
+            Icons.people_outline_rounded,
+            size: 64,
+            color: AppColors.textLight,
+          ),
           16.heightBox,
           Text(
             'No users found',
@@ -107,16 +111,14 @@ class _UserCardState extends State<_UserCard> {
     showDialog(
       context: ctx,
       builder: (_) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(
           'Delete User',
           style: GoogleFonts.poppins(fontWeight: FontWeight.w700),
         ),
         content: Text(
           'Are you sure you want to delete "${widget.data['name']}"? This action cannot be undone.',
-          style:
-              GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey),
+          style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey),
         ),
         actions: [
           TextButton(
@@ -132,7 +134,8 @@ class _UserCardState extends State<_UserCard> {
               backgroundColor: Colors.red,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: Text('Delete', style: GoogleFonts.poppins()),
           ),
@@ -179,16 +182,9 @@ class _UserCardState extends State<_UserCard> {
                 Container(
                   width: 48,
                   height: 48,
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: isAdmin
-                          ? [
-                              const Color(0xFFFF6F00),
-                              const Color(0xFFFF8F00)
-                            ]
-                          : [AppColors.infoBlue, const Color(0xFF1E88E5)],
-                    ),
+                    color: AppColors.primary,
                   ),
                   child: Center(
                     child: Text(
@@ -332,18 +328,14 @@ class _RoleBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: isAdmin
-            ? const Color(0xFFFFF3E0)
-            : AppColors.primaryLight,
+        color: isAdmin ? const Color(0xFFFFF3E0) : AppColors.primaryLight,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-            isAdmin
-                ? Icons.admin_panel_settings_rounded
-                : Icons.person_rounded,
+            isAdmin ? Icons.admin_panel_settings_rounded : Icons.person_rounded,
             size: 12,
             color: isAdmin ? AppColors.accentOrange : AppColors.primary,
           ),
@@ -377,30 +369,19 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
+    return ElevatedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 16),
+      label: Text(
+        label,
+        style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 16, color: color),
-            6.widthBox,
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

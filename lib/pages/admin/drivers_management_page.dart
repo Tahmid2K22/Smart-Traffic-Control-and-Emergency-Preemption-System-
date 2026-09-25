@@ -83,34 +83,50 @@ class _DriversManagementPageState extends State<DriversManagementPage> {
 
   Widget _buildFilterRow() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: List.generate(_filters.length, (i) {
-            final isSelected = _filterIndex == i;
-            return Padding(
-              padding: EdgeInsets.only(right: i < _filters.length - 1 ? 8 : 0),
-              child: FilterChip(
-                label: Text(
-                  _filters[i],
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: isSelected ? Colors.white : AppColors.textGrey,
-                  ),
+      padding: const EdgeInsets.fromLTRB(20, 20, 0, 10),
+      child: SizedBox(
+        height: 36,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: _filters.length,
+          separatorBuilder: (_, _) => 10.widthBox,
+          itemBuilder: (context, index) {
+            final isSelected = _filterIndex == index;
+            return GestureDetector(
+              onTap: () => setState(() => _filterIndex = index),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 8,
                 ),
-                selected: isSelected,
-                onSelected: (_) => setState(() => _filterIndex = i),
-                selectedColor: AppColors.primary,
-                backgroundColor: AppColors.background,
-                checkmarkColor: Colors.white,
-                side: BorderSide(
-                  color: isSelected ? AppColors.primary : AppColors.cardBorder,
+                decoration: BoxDecoration(
+                  color: isSelected ? AppColors.primary : AppColors.white,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isSelected ? AppColors.primary : AppColors.cardBorder,
+                  ),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: AppColors.primary.withValues(alpha: 0.25),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ]
+                      : [],
+                ),
+                child: Text(
+                  _filters[index],
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: isSelected ? AppColors.white : AppColors.textGrey,
+                  ),
                 ),
               ),
             );
-          }),
+          },
         ),
       ),
     );
@@ -226,158 +242,254 @@ class _DriverCardState extends State<_DriverCard> {
     final String vehicleNumber = data['vehicleNumber'] ?? '–';
     final String license = data['drivingLicense'] ?? '–';
 
+    final statusColor = isApproved ? AppColors.success : AppColors.warning;
+    final statusIcon = isApproved ? Icons.verified_rounded : Icons.pending_rounded;
+    final statusLabel = isApproved ? 'Verified' : 'Pending';
+
     return Container(
       decoration: BoxDecoration(
         color: AppColors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.cardBorder),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header row
-            Row(
+      child: Column(
+        children: [
+          // top color indicator bar
+          Container(
+            height: 4,
+            decoration: BoxDecoration(
+              color: statusColor,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(18),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // avatar
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      colors: [AppColors.primary, AppColors.primaryDark],
-                    ),
-                  ),
-                  child: Center(
-                    child: Text(
-                      _initials(name),
-                      style: GoogleFonts.poppins(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                // header info
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.person_rounded,
+                        color: statusColor,
+                        size: 20,
                       ),
                     ),
-                  ),
-                ),
-                12.widthBox,
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
+                    10.widthBox,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textDark,
+                            ),
+                          ),
+                          2.heightBox,
+                          Text(
+                            phone,
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              color: AppColors.textLight,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        statusLabel,
                         style: GoogleFonts.poppins(
-                          fontSize: 15,
+                          fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: AppColors.textDark,
+                          color: statusColor,
                         ),
                       ),
-                      Text(
-                        phone,
-                        style: GoogleFonts.poppins(
-                          fontSize: 12,
-                          color: AppColors.textGrey,
+                    ),
+                  ],
+                ),
+
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: Divider(height: 1, color: Color(0xFFEFEFEF)),
+                ),
+
+                // city and license
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.location_on_rounded,
+                      color: AppColors.primary,
+                      size: 18,
+                    ),
+                    8.widthBox,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            city,
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textDark,
+                            ),
+                          ),
+                          4.heightBox,
+                          Text(
+                            'City/Region',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: AppColors.textGrey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          license,
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textDark,
+                          ),
                         ),
+                        4.heightBox,
+                        Text(
+                          'License No.',
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            color: AppColors.textGrey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+
+                14.heightBox,
+
+                // vehicle details
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.background,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.cardBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      _infoChip(
+                        icon: Icons.local_hospital_rounded,
+                        label: vehicleType,
+                        color: AppColors.primary,
+                      ),
+                      const Spacer(),
+                      _infoChip(
+                        icon: Icons.directions_car_rounded,
+                        label: vehicleNumber,
+                        color: const Color(0xFF2E7D32),
                       ),
                     ],
                   ),
                 ),
-                // status badge
-                _StatusBadge(isApproved: isApproved),
+
+                14.heightBox,
+
+                // action buttons
+                if (_loading)
+                  const Center(
+                      child: SizedBox(
+                          height: 36,
+                          width: 36,
+                          child: CircularProgressIndicator(strokeWidth: 2)))
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _ActionButton(
+                          icon: isApproved
+                              ? Icons.cancel_outlined
+                              : Icons.check_circle_outline_rounded,
+                          label: isApproved ? 'Revoke' : 'Verify',
+                          color: isApproved ? AppColors.warning : AppColors.success,
+                          onTap: () => _doAction(
+                            () => isApproved
+                                ? widget.adminService.rejectDriver(widget.uid)
+                                : widget.adminService.verifyDriver(widget.uid),
+                          ),
+                        ),
+                      ),
+                      8.widthBox,
+                      Expanded(
+                        child: _ActionButton(
+                          icon: Icons.delete_outline_rounded,
+                          label: 'Delete',
+                          color: Colors.red.shade700,
+                          onTap: () => _confirmDelete(context),
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
-            12.heightBox,
-            const Divider(height: 1, color: Color(0xFFF0F0F0)),
-            12.heightBox,
-            // Info grid
-            _infoRow(Icons.location_city_rounded, 'City', city),
-            6.heightBox,
-            _infoRow(Icons.directions_car_rounded, 'Vehicle', '$vehicleType • $vehicleNumber'),
-            6.heightBox,
-            _infoRow(Icons.badge_rounded, 'License', license),
-            12.heightBox,
-            // Action buttons
-            if (_loading)
-              const Center(child: SizedBox(height: 36, width: 36, child: CircularProgressIndicator(strokeWidth: 2)))
-            else
-              Row(
-                children: [
-                  // Verify / Verified toggle
-                  Expanded(
-                    child: _ActionButton(
-                      icon: isApproved
-                          ? Icons.cancel_outlined
-                          : Icons.check_circle_outline_rounded,
-                      label: isApproved ? 'Revoke' : 'Verify',
-                      color: isApproved ? AppColors.warning : AppColors.success,
-                      onTap: () => _doAction(
-                        () => isApproved
-                            ? widget.adminService.rejectDriver(widget.uid)
-                            : widget.adminService.verifyDriver(widget.uid),
-                      ),
-                    ),
-                  ),
-                  8.widthBox,
-                  // Delete
-                  Expanded(
-                    child: _ActionButton(
-                      icon: Icons.delete_outline_rounded,
-                      label: 'Delete',
-                      color: Colors.red.shade700,
-                      onTap: () => _confirmDelete(context),
-                    ),
-                  ),
-                ],
-              ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _infoRow(IconData icon, String label, String value) {
+  Widget _infoChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 16, color: AppColors.primary),
-        6.widthBox,
+        Icon(icon, size: 13, color: color),
+        5.widthBox,
         Text(
-          '$label: ',
+          label,
           style: GoogleFonts.poppins(
-            fontSize: 12,
-            color: AppColors.textLight,
+            fontSize: 11,
             fontWeight: FontWeight.w500,
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: GoogleFonts.poppins(
-              fontSize: 12,
-              color: AppColors.textDark,
-              fontWeight: FontWeight.w600,
-            ),
-            overflow: TextOverflow.ellipsis,
+            color: AppColors.textGrey,
           ),
         ),
       ],
     );
-  }
-
-  String _initials(String name) {
-    final parts = name.trim().split(' ');
-    if (parts.length >= 2) {
-      return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
-    }
-    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
   }
 }
 
@@ -432,30 +544,24 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
+    return ElevatedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 16),
+      label: Text(
+        label,
+        style: GoogleFonts.poppins(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
         padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 16, color: color),
-            6.widthBox,
-            Text(
-              label,
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: color,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
