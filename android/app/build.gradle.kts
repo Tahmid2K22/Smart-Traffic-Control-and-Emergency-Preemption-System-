@@ -9,7 +9,8 @@ plugins {
 
 android {
     namespace = "com.ambulance.bd.ambulance_dashboard"
-    compileSdk = flutter.compileSdkVersion
+    // geocoding_android and its AndroidX dependencies require API 34+.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
