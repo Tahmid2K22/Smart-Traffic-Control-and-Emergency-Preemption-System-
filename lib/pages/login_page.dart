@@ -38,7 +38,6 @@ class _LoginPageState extends State<LoginPage> {
             await prefs.setString('userEmail', data['email'] ?? userCredential.user!.email ?? '');
             await prefs.setString('userPhone', data['phone'] ?? '');
             await prefs.setString('userCity', data['city'] ?? '');
-            await prefs.setString('userRole', data['role'] ?? 'user');
           }
         } catch (e) {
           debugPrint('Error fetching user data: $e');
