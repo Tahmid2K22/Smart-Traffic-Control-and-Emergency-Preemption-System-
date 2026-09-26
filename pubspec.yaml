@@ -48,6 +48,7 @@ dependencies:
   url_launcher: ^6.3.2
   geolocator: ^14.0.2
   geocoding: ^5.0.0
+  flutter_svg: ^2.2.1
   flutter_polyline_points: ^2.1.0
 
 dev_dependencies:
@@ -70,6 +71,7 @@ flutter:
   assets:
     - assets/map_style.json
     - assets/e ambulance logo.png
+    - assets/map_pin.svg
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

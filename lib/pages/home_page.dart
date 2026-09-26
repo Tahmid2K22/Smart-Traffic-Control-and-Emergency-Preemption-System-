@@ -10,6 +10,7 @@ import '../constants/colors.dart';
 import '../models/models.dart';
 import 'ambulance_booking_screen.dart';
 import 'nearby_places_page.dart';
+import 'notifications_page.dart';
 import 'profile_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -167,7 +168,7 @@ class _HomePageState extends State<HomePage> {
             count: _unreadNotifications,
             child: IconButton(
               tooltip: 'Notifications',
-              onPressed: () => _showMessage(_unreadNotifications == 0 ? 'You are all caught up.' : '$_unreadNotifications unread notifications'),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const NotificationsPage())),
               icon: const Icon(Icons.notifications_none_rounded, color: AppColors.textDark, size: 25),
             ),
           ),
