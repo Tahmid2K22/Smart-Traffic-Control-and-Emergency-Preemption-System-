@@ -1,1 +1,25 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"e-ambulance-system-001","appId":"1:261691548059:android:9ba6cdf7fdd8a32c1f013e","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"e-ambulance-system-001","configurations":{"android":"1:261691548059:android:9ba6cdf7fdd8a32c1f013e","ios":"1:261691548059:ios:60158d3d585632f01f013e","macos":"1:261691548059:ios:60158d3d585632f01f013e","web":"1:261691548059:web:126e748782093a6f1f013e","windows":"1:261691548059:web:2fdb2158e642bca41f013e"}}}}}}
+{
+	"flutter": {
+		"platforms": {
+			"android": {
+				"default": {
+					"projectId": "e-ambulance-system-001",
+					"appId": "1:261691548059:android:9ba6cdf7fdd8a32c1f013e",
+					"fileOutput": "android/app/google-services.json"
+				}
+			},
+			"dart": {
+				"lib/firebase_options.dart": {
+					"projectId": "e-ambulance-system-001",
+					"configurations": {
+						"android": "1:261691548059:android:9ba6cdf7fdd8a32c1f013e",
+						"ios": "1:261691548059:ios:60158d3d585632f01f013e",
+						"macos": "1:261691548059:ios:60158d3d585632f01f013e",
+						"web": "1:261691548059:web:126e748782093a6f1f013e",
+						"windows": "1:261691548059:web:2fdb2158e642bca41f013e"
+					}
+				}
+			}
+		}
+	}
+}

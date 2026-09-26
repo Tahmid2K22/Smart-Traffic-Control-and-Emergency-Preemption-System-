@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../constants/colors.dart';
 import '../services/deep_link_navigation_service.dart';
+import '../services/places_api_service.dart';
 
 class AmbulanceBookingScreen extends StatefulWidget {
   const AmbulanceBookingScreen({super.key});
@@ -23,6 +27,9 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   final _destinationController = TextEditingController();
   final _destinationFocus = FocusNode();
   final _geocoder = Geocoding();
+  final _placesApi = PlacesApiService();
+  Timer? _autocompleteTimer;
+  List<PlaceSuggestion> _destinationSuggestions = const [];
   GoogleMapController? _mapController;
   LatLng? _pickup;
   LatLng? _destination;
@@ -49,6 +56,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     _pickupController.dispose();
     _destinationController.dispose();
     _destinationFocus.dispose();
+    _autocompleteTimer?.cancel();
+    _placesApi.dispose();
     super.dispose();
   }
 
@@ -124,6 +133,43 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     } finally {
       if (mounted) setState(() => _isSearching = false);
     }
+  }
+
+  void _onDestinationChanged(String value) {
+    _autocompleteTimer?.cancel();
+    if (value.trim().length < 2 || _pickup == null || !_placesApi.isConfigured) {
+      setState(() => _destinationSuggestions = const []);
+      return;
+    }
+    _autocompleteTimer = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        final suggestions = await _placesApi.autocomplete(input: value, bias: _pickup!);
+        if (mounted && _destinationController.text == value) {
+          setState(() => _destinationSuggestions = suggestions);
+        }
+      } on Exception {
+        if (mounted) setState(() => _destinationSuggestions = const []);
+      }
+    });
+  }
+
+  Future<void> _selectDestinationSuggestion(PlaceSuggestion suggestion) async {
+    NearbyPlaceResult? place;
+    try {
+      place = await _placesApi.getPlace(suggestion.placeId);
+    } on Exception {
+      if (mounted) _showMessage('Place details are temporarily unavailable.');
+      return;
+    }
+    if (!mounted || place == null) return;
+    final resolvedPlace = place;
+    setState(() {
+      _destination = resolvedPlace.location;
+      _mapCenter = resolvedPlace.location;
+      _destinationController.text = resolvedPlace.address;
+      _destinationSuggestions = const [];
+    });
+    await _mapController?.animateCamera(CameraUpdate.newLatLng(resolvedPlace.location));
   }
 
   void _startMapPicking({required bool pickup}) {
@@ -210,20 +256,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
         infoWindow: const InfoWindow(title: 'Pickup location'),
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
       ));
-      markers.addAll([
-        Marker(
-          markerId: const MarkerId('ambulance-1'),
-          position: LatLng(_pickup!.latitude + .004, _pickup!.longitude + .003),
-          infoWindow: const InfoWindow(title: 'Ambulance A-12', snippet: 'Available now'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-        ),
-        Marker(
-          markerId: const MarkerId('ambulance-2'),
-          position: LatLng(_pickup!.latitude - .003, _pickup!.longitude + .005),
-          infoWindow: const InfoWindow(title: 'Ambulance B-08', snippet: 'Available now'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-        ),
-      ]);
+          // Removed simulated ambulance markers
     }
     if (_destination != null && _mode == _BookingMode.planning) {
       markers.add(Marker(
@@ -296,12 +329,16 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
                 destinationController: _destinationController,
                 destinationFocus: _destinationFocus,
                 isSearching: _isSearching,
+                destinationSuggestions: _destinationSuggestions,
                 tiers: _tiers,
                 selectedIndex: _selectedAmbulance,
                 distanceKm: _distanceKm,
                 estimatedFare: _estimatedFare,
                 onPickupSubmitted: (value) => _geocode(value, isPickup: true),
                 onDestinationSubmitted: (value) => _geocode(value, isPickup: false),
+                onDestinationChanged: _onDestinationChanged,
+                onSuggestionSelected: _selectDestinationSuggestion,
+                onRecentSelected: (value) => _geocode(value, isPickup: false),
                 onSetPickupOnMap: () => _startMapPicking(pickup: true),
                 onSetDestinationOnMap: () => _startMapPicking(pickup: false),
                 onSelected: (index) => setState(() => _selectedAmbulance = index),
@@ -321,12 +358,16 @@ class _TripPlanningSheet extends StatelessWidget {
     required this.destinationController,
     required this.destinationFocus,
     required this.isSearching,
+    required this.destinationSuggestions,
     required this.tiers,
     required this.selectedIndex,
     required this.distanceKm,
     required this.estimatedFare,
     required this.onPickupSubmitted,
     required this.onDestinationSubmitted,
+    required this.onDestinationChanged,
+    required this.onSuggestionSelected,
+    required this.onRecentSelected,
     required this.onSetPickupOnMap,
     required this.onSetDestinationOnMap,
     required this.onSelected,
@@ -338,12 +379,16 @@ class _TripPlanningSheet extends StatelessWidget {
   final TextEditingController destinationController;
   final FocusNode destinationFocus;
   final bool isSearching;
+  final List<PlaceSuggestion> destinationSuggestions;
   final List<_AmbulanceTier> tiers;
   final int selectedIndex;
   final double distanceKm;
   final int estimatedFare;
   final ValueChanged<String> onPickupSubmitted;
   final ValueChanged<String> onDestinationSubmitted;
+  final ValueChanged<String> onDestinationChanged;
+  final ValueChanged<PlaceSuggestion> onSuggestionSelected;
+  final ValueChanged<String> onRecentSelected;
   final VoidCallback onSetPickupOnMap;
   final VoidCallback onSetDestinationOnMap;
   final ValueChanged<int> onSelected;
@@ -367,14 +412,20 @@ class _TripPlanningSheet extends StatelessWidget {
           const SizedBox(height: 16),
           _AddressField(controller: pickupController, icon: Icons.my_location_rounded, color: AppColors.infoBlue, hint: 'Pickup location', onSubmitted: onPickupSubmitted, onMapTap: onSetPickupOnMap),
           const SizedBox(height: 8),
-          _AddressField(controller: destinationController, focusNode: destinationFocus, icon: Icons.location_on_rounded, color: AppColors.primary, hint: 'Where to?', onSubmitted: onDestinationSubmitted, onMapTap: onSetDestinationOnMap),
+          _AddressField(controller: destinationController, focusNode: destinationFocus, icon: Icons.location_on_rounded, color: AppColors.primary, hint: 'Where to?', onChanged: onDestinationChanged, onSubmitted: onDestinationSubmitted, onMapTap: onSetDestinationOnMap),
+          if (destinationSuggestions.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.only(top: 4),
+              decoration: BoxDecoration(color: AppColors.white, border: Border.all(color: AppColors.cardBorder), borderRadius: BorderRadius.circular(12)),
+              child: Column(children: destinationSuggestions.map((suggestion) => ListTile(dense: true, leading: const Icon(Icons.location_on_outlined, color: AppColors.primary), title: Text(suggestion.description), onTap: () => onSuggestionSelected(suggestion))).toList()),
+            ),
           if (isSearching) const Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator(minHeight: 2)),
           const SizedBox(height: 14),
           Row(children: [Expanded(child: _QuickAction(icon: Icons.push_pin_rounded, label: 'Set on map', onTap: onSetDestinationOnMap)), const SizedBox(width: 8), const Expanded(child: _QuickAction(icon: Icons.star_rounded, label: 'Saved places')), const SizedBox(width: 8), const Expanded(child: _QuickAction(icon: Icons.public_rounded, label: 'Different city'))]),
           const SizedBox(height: 16),
           const Text('Recent locations', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-          const _RecentLocation(title: 'Square Hospital', subtitle: '18/F, Panthapath, Dhaka'),
-          const _RecentLocation(title: 'Dhaka Medical College', subtitle: 'Secretariat Road, Dhaka'),
+          _RecentLocation(title: 'Square Hospital', subtitle: '18/F, Panthapath, Dhaka', onTap: () => onRecentSelected('Square Hospital, Panthapath, Dhaka')),
+          _RecentLocation(title: 'Dhaka Medical College', subtitle: 'Secretariat Road, Dhaka', onTap: () => onRecentSelected('Dhaka Medical College Hospital, Dhaka')),
           const SizedBox(height: 12),
           const Text('Choose ambulance type', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 10),
@@ -424,20 +475,21 @@ class _MapPinSheet extends StatelessWidget {
 class _CenterPin extends StatelessWidget {
   const _CenterPin();
   @override
-  Widget build(BuildContext context) => const IgnorePointer(child: Center(child: Padding(padding: EdgeInsets.only(bottom: 34), child: Icon(Icons.location_on_rounded, color: Colors.black, size: 52))));
+  Widget build(BuildContext context) => IgnorePointer(child: Center(child: Padding(padding: const EdgeInsets.only(bottom: 24), child: SvgPicture.asset('assets/map_pin.svg', width: 30, height: 38))));
 }
 
 class _AddressField extends StatelessWidget {
-  const _AddressField({required this.controller, required this.icon, required this.color, required this.hint, required this.onSubmitted, required this.onMapTap, this.focusNode});
+  const _AddressField({required this.controller, required this.icon, required this.color, required this.hint, required this.onSubmitted, required this.onMapTap, this.onChanged, this.focusNode});
   final TextEditingController controller;
   final FocusNode? focusNode;
   final IconData icon;
   final Color color;
   final String hint;
   final ValueChanged<String> onSubmitted;
+  final ValueChanged<String>? onChanged;
   final VoidCallback onMapTap;
   @override
-  Widget build(BuildContext context) => TextField(controller: controller, focusNode: focusNode, textInputAction: TextInputAction.search, onSubmitted: onSubmitted, decoration: InputDecoration(prefixIcon: Icon(icon, color: color, size: 20), suffixIcon: IconButton(onPressed: onMapTap, tooltip: 'Set on map', icon: const Icon(Icons.push_pin_outlined)), hintText: hint, filled: true, fillColor: AppColors.background, border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12)));
+  Widget build(BuildContext context) => TextField(controller: controller, focusNode: focusNode, textInputAction: TextInputAction.search, onChanged: onChanged, onSubmitted: onSubmitted, decoration: InputDecoration(prefixIcon: Icon(icon, color: color, size: 20), suffixIcon: IconButton(onPressed: onMapTap, tooltip: 'Set on map', icon: const Icon(Icons.push_pin_outlined)), hintText: hint, filled: true, fillColor: AppColors.background, border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none), contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12)));
 }
 
 class _QuickAction extends StatelessWidget {
@@ -450,11 +502,12 @@ class _QuickAction extends StatelessWidget {
 }
 
 class _RecentLocation extends StatelessWidget {
-  const _RecentLocation({required this.title, required this.subtitle});
+  const _RecentLocation({required this.title, required this.subtitle, required this.onTap});
   final String title;
   final String subtitle;
+  final VoidCallback onTap;
   @override
-  Widget build(BuildContext context) => ListTile(contentPadding: EdgeInsets.zero, dense: true, leading: const Icon(Icons.history_rounded, color: AppColors.textLight), title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)), subtitle: Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textGrey)));
+  Widget build(BuildContext context) => ListTile(onTap: onTap, contentPadding: EdgeInsets.zero, dense: true, leading: const Icon(Icons.history_rounded, color: AppColors.textLight), title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)), subtitle: Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textGrey)), trailing: const Icon(Icons.north_west_rounded, size: 17, color: AppColors.textLight));
 }
 
 class _TierCard extends StatelessWidget {
