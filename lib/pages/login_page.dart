@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/colors.dart';
+import '../services/auth_service.dart';
 import 'register_page.dart';
 
 class LoginPage extends StatefulWidget {
@@ -38,6 +39,12 @@ class _LoginPageState extends State<LoginPage> {
             await prefs.setString('userEmail', data['email'] ?? userCredential.user!.email ?? '');
             await prefs.setString('userPhone', data['phone'] ?? '');
             await prefs.setString('userCity', data['city'] ?? '');
+
+            // Sync driver profile to Supabase on every login
+            await AuthService.syncDriverOnLogin(
+              firebaseUid: userCredential.user!.uid,
+              firestoreData: data,
+            );
           }
         } catch (e) {
           debugPrint('Error fetching user data: $e');

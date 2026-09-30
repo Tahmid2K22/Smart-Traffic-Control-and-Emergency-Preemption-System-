@@ -446,7 +446,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   12.heightBox,
                   DropdownButtonFormField<String>(
-                    value: bdDistricts.contains(tempCity) ? tempCity : null,
+                    initialValue: bdDistricts.contains(tempCity) ? tempCity : null,
                     hint: Text(
                       'Select City (District)',
                       style: GoogleFonts.poppins(fontSize: 13),
@@ -489,6 +489,9 @@ class _ProfilePageState extends State<ProfilePage> {
                     height: 50,
                     child: ElevatedButton(
                       onPressed: () async {
+                         // Capture context refs before any await
+                         final nav = Navigator.of(context);
+                         final messenger = ScaffoldMessenger.of(context);
                         // Get current user to update Firestore
                         final user = FirebaseAuth.instance.currentUser;
                         
@@ -520,21 +523,22 @@ class _ProfilePageState extends State<ProfilePage> {
                           }
                         }
                         
-                        if (mounted) Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Profile updated successfully!',
-                          style: GoogleFonts.poppins(fontSize: 13),
-                        ),
-                        backgroundColor: const Color(0xFF2E7D32),
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                    );
-                  },
+                         if (!mounted) return;
+                         nav.pop();
+                         messenger.showSnackBar(
+                           SnackBar(
+                             content: Text(
+                               'Profile updated successfully!',
+                               style: GoogleFonts.poppins(fontSize: 13),
+                             ),
+                             backgroundColor: const Color(0xFF2E7D32),
+                             behavior: SnackBarBehavior.floating,
+                             shape: RoundedRectangleBorder(
+                               borderRadius: BorderRadius.circular(10),
+                             ),
+                           ),
+                         );
+                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: AppColors.white,

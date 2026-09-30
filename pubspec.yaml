@@ -50,6 +50,8 @@ dependencies:
   geocoding: ^5.0.0
   flutter_svg: ^2.2.1
   flutter_polyline_points: ^2.1.0
+  supabase_flutter: ^2.9.0
+  flutter_dotenv: ^5.2.1
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +71,7 @@ dev_dependencies:
 flutter:
 
   assets:
+    - .env
     - assets/map_style.json
     - assets/e ambulance logo.png
     - assets/map_pin.svg

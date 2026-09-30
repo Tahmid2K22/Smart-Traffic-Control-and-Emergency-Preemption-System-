@@ -22,7 +22,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _searchController = TextEditingController();
   final _searchFocus = FocusNode();
-  final _geocoder = Geocoding();
+  Geocoding? _geocoder;
   String _name = 'User';
   String _initials = 'U';
   String _region = 'Your area';
@@ -88,12 +88,14 @@ class _HomePageState extends State<HomePage> {
       if (permission == LocationPermission.denied) permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) return;
       final position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.low, distanceFilter: 250));
-      final marks = await _geocoder.placemarkFromCoordinates(position.latitude, position.longitude);
+      _geocoder ??= Geocoding();
+      final marks = await _geocoder!.placemarkFromCoordinates(position.latitude, position.longitude);
       if (!mounted || marks.isEmpty) return;
       final mark = marks.first;
       final area = mark.administrativeArea?.trim().isNotEmpty == true ? mark.administrativeArea! : mark.locality;
       if (area != null && area.trim().isNotEmpty) setState(() => _region = area);
-    } on Exception {
+    } catch (e) {
+      // Catch all errors (including TypeErrors from missing JS SDKs) to prevent red screen
       // Keep the last known label when platform location or geocoding is unavailable.
     }
   }
