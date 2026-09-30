@@ -62,10 +62,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     }
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -161,7 +157,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                     'drivingLicense': 'DL-DUMMY-001',
                     'createdAt': FieldValue.serverTimestamp(),
                   });
-                  if (context.mounted) {
+                  if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Dummy Driver Added!')),
                     );

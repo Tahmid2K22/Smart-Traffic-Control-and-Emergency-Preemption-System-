@@ -56,6 +56,9 @@ app.*.map.json
 key.properties
 android/key.properties
 
+# Web index contains API key — keep it local
+web/index.html
+
 # Firebase Secrets
 lib/firebase_options.dart
 android/app/google-services.json

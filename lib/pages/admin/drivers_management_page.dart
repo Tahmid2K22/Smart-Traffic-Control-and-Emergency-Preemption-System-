@@ -243,7 +243,6 @@ class _DriverCardState extends State<_DriverCard> {
     final String license = data['drivingLicense'] ?? '–';
 
     final statusColor = isApproved ? AppColors.success : AppColors.warning;
-    final statusIcon = isApproved ? Icons.verified_rounded : Icons.pending_rounded;
     final statusLabel = isApproved ? 'Verified' : 'Pending';
 
     return Container(
@@ -493,41 +492,6 @@ class _DriverCardState extends State<_DriverCard> {
   }
 }
 
-// reusable small widgets
-class _StatusBadge extends StatelessWidget {
-  final bool isApproved;
-  const _StatusBadge({required this.isApproved});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: isApproved ? AppColors.successLight : AppColors.warningLight,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            isApproved ? Icons.verified_rounded : Icons.pending_rounded,
-            size: 12,
-            color: isApproved ? AppColors.success : AppColors.warning,
-          ),
-          4.widthBox,
-          Text(
-            isApproved ? 'Verified' : 'Pending',
-            style: GoogleFonts.poppins(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: isApproved ? AppColors.success : AppColors.warning,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _ActionButton extends StatelessWidget {
   final IconData icon;

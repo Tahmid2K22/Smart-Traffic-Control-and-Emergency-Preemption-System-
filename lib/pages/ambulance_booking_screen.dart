@@ -7,9 +7,13 @@ import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import '../constants/colors.dart';
-import '../services/deep_link_navigation_service.dart';
 import '../services/places_api_service.dart';
+import '../services/request_service.dart';
+import 'tracking_page.dart';
 
 class AmbulanceBookingScreen extends StatefulWidget {
   const AmbulanceBookingScreen({super.key});
@@ -26,7 +30,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   final _pickupController = TextEditingController(text: 'Detecting current location...');
   final _destinationController = TextEditingController();
   final _destinationFocus = FocusNode();
-  final _geocoder = Geocoding();
+  Geocoding? _geocoder;
   final _placesApi = PlacesApiService();
   Timer? _autocompleteTimer;
   List<PlaceSuggestion> _destinationSuggestions = const [];
@@ -94,7 +98,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
 
   Future<void> _updateAddress(LatLng point, {required bool isPickup}) async {
     try {
-      final marks = await _geocoder.placemarkFromCoordinates(point.latitude, point.longitude);
+      _geocoder ??= Geocoding();
+      final marks = await _geocoder!.placemarkFromCoordinates(point.latitude, point.longitude);
       if (!mounted || marks.isEmpty) return;
       final mark = marks.first;
       final address = [mark.street, mark.locality, mark.administrativeArea]
@@ -115,7 +120,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     if (value.trim().isEmpty) return;
     setState(() => _isSearching = true);
     try {
-      final locations = await _geocoder.locationFromAddress(value.trim());
+      _geocoder ??= Geocoding();
+      final locations = await _geocoder!.locationFromAddress(value.trim());
       if (!mounted || locations.isEmpty) return;
       final point = LatLng(locations.first.latitude, locations.first.longitude);
       setState(() {
@@ -210,20 +216,56 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       _showMessage('Add a pickup and destination before booking.');
       return;
     }
-    final opened = await DeepLinkNavigationService.openGoogleMaps(
-      originLatitude: pickup.latitude,
-      originLongitude: pickup.longitude,
-      destinationLatitude: destination.latitude,
-      destinationLongitude: destination.longitude,
-    );
-    if (!opened) {
-      await DeepLinkNavigationService.openWaze(
-        destinationLatitude: destination.latitude,
-        destinationLongitude: destination.longitude,
-      );
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      _showMessage('You must be logged in to book.');
+      return;
     }
-    if (mounted) {
-      _showMessage('${_tiers[_selectedAmbulance].name} requested. Navigation opened.');
+
+    // Show loading overlay
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator(color: AppColors.primary)),
+    );
+
+    try {
+      // Fetch user profile for name and phone
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final data = doc.data() ?? {};
+      final userName = data['name'] ?? user.displayName ?? 'User';
+      final userPhone = data['phone'] ?? '';
+
+      // Create request in Supabase
+      final requestId = await RequestService.createRequest(
+        userFirebaseUid: user.uid,
+        userName: userName,
+        userPhone: userPhone,
+        ambulanceType: _tiers[_selectedAmbulance].name,
+        pickupLat: pickup.latitude,
+        pickupLng: pickup.longitude,
+        pickupAddress: _pickupController.text,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        destinationAddress: _destinationController.text,
+        estimatedFare: _estimatedFare,
+        distanceKm: _distanceKm,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context).pop(); // dismiss loading
+
+      // Navigate to tracking page
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (_) => TrackingPage(requestId: requestId, isDriver: false),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // dismiss loading
+      _showMessage('Failed to book ambulance. Try again.');
     }
   }
 

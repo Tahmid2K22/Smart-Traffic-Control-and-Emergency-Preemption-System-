@@ -3,6 +3,8 @@ import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import 'firebase_options.dart';
 
 import 'constants/colors.dart';
@@ -10,13 +12,69 @@ import 'pages/home_page.dart';
 import 'pages/activity_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/login_page.dart';
+import 'pages/driver/driver_dashboard_page.dart';
+import 'models/request_model.dart';
+import 'services/request_service.dart';
+import 'constants/app_config.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+
+  // Load .env — never crash if file is missing
+  try { await AppConfig.load(); } catch (_) {}
+
+  // Firebase is required — crash loudly if it fails
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Supabase is optional — driver features degrade if keys are not set
+  try {
+    final url = AppConfig.supabaseUrl;
+    final key = AppConfig.supabaseAnonKey;
+    // ignore: deprecated_member_use
+    await Supabase.initialize(url: url, anonKey: key);
+  } catch (_) {
+    // No Supabase keys yet — app still runs for regular users
+  }
+
   runApp(const AmbulanceApp());
+}
+
+class SetupErrorApp extends StatelessWidget {
+  const SetupErrorApp({super.key, required this.error});
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 500),
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 64),
+                const SizedBox(height: 24),
+                const Text('Setup Required', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black87)),
+                const SizedBox(height: 16),
+                const Text('The app could not start because some environment variables are missing or invalid:', style: TextStyle(fontSize: 16, color: Colors.black54)),
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.red.shade200)),
+                  child: Text(error, style: TextStyle(fontSize: 14, fontFamily: 'monospace', color: Colors.red.shade900)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class AmbulanceApp extends StatelessWidget {
@@ -46,15 +104,80 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
-        // User is not signed in
         if (!snapshot.hasData) {
           return const LoginPage();
         }
-
-        // User is signed in
-        return const DashboardPage();
+        // Role-based routing: check Firestore role
+        return FutureBuilder<DocumentSnapshot>(
+          future: FirebaseFirestore.instance
+              .collection('users')
+              .doc(snapshot.data!.uid)
+              .get(),
+          builder: (context, roleSnap) {
+            if (!roleSnap.hasData) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+              );
+            }
+            final role = (roleSnap.data?.data() as Map<String, dynamic>?)?['role'] ?? 'user';
+            if (role == 'driver') {
+              return _DriverGate(firebaseUid: snapshot.data!.uid);
+            }
+            return const DashboardPage();
+          },
+        );
       },
     );
+  }
+}
+
+/// Loads or creates the driver's Supabase profile, then shows [DriverDashboardPage].
+class _DriverGate extends StatefulWidget {
+  const _DriverGate({required this.firebaseUid});
+  final String firebaseUid;
+
+  @override
+  State<_DriverGate> createState() => _DriverGateState();
+}
+
+class _DriverGateState extends State<_DriverGate> {
+  DriverProfile? _profile;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDriver();
+  }
+
+  Future<void> _loadDriver() async {
+    DriverProfile? profile = await RequestService.getMyDriverProfile();
+    if (profile == null) {
+      // Sync from Firestore → Supabase drivers table on first login
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.firebaseUid)
+          .get();
+      final data = doc.data() ?? {};
+      await RequestService.upsertDriverProfile(
+        firebaseUid: widget.firebaseUid,
+        name: data['name'] ?? 'Driver',
+        phone: data['phone'] ?? '',
+        vehicleType: data['vehicleType'] ?? 'Basic',
+        vehicleNumber: data['vehicleNumber'] ?? '',
+      );
+      profile = await RequestService.getMyDriverProfile();
+    }
+    if (mounted) setState(() => _profile = profile);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_profile == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+      );
+    }
+    return DriverDashboardPage(driver: _profile!);
   }
 }
 

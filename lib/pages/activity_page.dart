@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:velocity_x/velocity_x.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:velocity_x/velocity_x.dart';
+
 import '../constants/colors.dart';
-import '../models/models.dart';
+import '../models/message_model.dart';
+import '../models/request_model.dart';
+import '../services/request_service.dart';
+import 'chat_page.dart';
+import 'tracking_page.dart';
 
 class ActivityPage extends StatefulWidget {
   const ActivityPage({super.key});
@@ -15,126 +20,43 @@ class _ActivityPageState extends State<ActivityPage>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   int _selectedFilter = 0;
+  bool _loading = true;
+  List<AmbulanceRequest> _requests = [];
 
   final List<String> _filters = ['All', 'Active', 'Completed', 'Cancelled'];
-
-  // dummy data
-  final List<ActivityItem> _allItems = [
-    const ActivityItem(
-      id: 'AMB-2024-0045',
-      destination: 'Khulna Medical College Hospital',
-      address: 'Moylapota, Khulna',
-      date: 'Today, 06:42 AM',
-      status: ActivityStatus.active,
-      ambulanceType: 'Advanced Life Support',
-      driver: 'Md. Rafiqul Islam',
-      vehicle: 'KHU-ALS-003',
-      amount: 850,
-      eta: '8 min',
-      distance: '1.2 km',
-    ),
-    const ActivityItem(
-      id: 'AMB-2024-0044',
-      destination: 'Shaheed Sheikh Abu Naser Hospital',
-      address: 'Sonadanga, Khulna',
-      date: 'Today, 05:10 AM',
-      status: ActivityStatus.completed,
-      ambulanceType: 'Basic Life Support',
-      driver: 'Md. Alamgir Hossain',
-      vehicle: 'KHU-BLS-007',
-      amount: 600,
-      eta: null,
-      distance: '2.8 km',
-    ),
-    const ActivityItem(
-      id: 'AMB-2024-0043',
-      destination: 'Gazi Medical College',
-      address: 'Chuknagar, Khulna',
-      date: 'Yesterday, 09:30 PM',
-      status: ActivityStatus.completed,
-      ambulanceType: 'Basic Life Support',
-      driver: 'Md. Karim Mia',
-      vehicle: 'KHU-BLS-002',
-      amount: 750,
-      eta: null,
-      distance: '3.5 km',
-    ),
-    const ActivityItem(
-      id: 'AMB-2024-0042',
-      destination: 'Ad-Din Hospital',
-      address: 'Nirala, Khulna',
-      date: 'Yesterday, 02:15 PM',
-      status: ActivityStatus.cancelled,
-      ambulanceType: 'Advanced Life Support',
-      driver: 'Md. Hasan Ali',
-      vehicle: 'KHU-ALS-001',
-      amount: 0,
-      eta: null,
-      distance: '4.1 km',
-    ),
-    const ActivityItem(
-      id: 'AMB-2024-0041',
-      destination: 'Rupsha Upazila Health Complex',
-      address: 'Rupsha, Khulna',
-      date: '18 Sep, 11:00 AM',
-      status: ActivityStatus.completed,
-      ambulanceType: 'Patient Transport',
-      driver: 'Md. Jubayer Ahmed',
-      vehicle: 'KHU-PT-005',
-      amount: 500,
-      eta: null,
-      distance: '5.7 km',
-    ),
-    const ActivityItem(
-      id: 'AMB-2024-0040',
-      destination: 'Khulna Medical College Hospital',
-      address: 'Moylapota, Khulna',
-      date: '17 Sep, 03:45 PM',
-      status: ActivityStatus.completed,
-      ambulanceType: 'Neonatal Ambulance',
-      driver: 'Md. Shafiqul Baree',
-      vehicle: 'KHU-NEO-001',
-      amount: 1200,
-      eta: null,
-      distance: '1.2 km',
-    ),
-    const ActivityItem(
-      id: 'AMB-2024-0039',
-      destination: 'Shaheed Sheikh Abu Naser Hospital',
-      address: 'Sonadanga, Khulna',
-      date: '15 Sep, 08:20 AM',
-      status: ActivityStatus.cancelled,
-      ambulanceType: 'Basic Life Support',
-      driver: 'Md. Nazmul Haque',
-      vehicle: 'KHU-BLS-010',
-      amount: 0,
-      eta: null,
-      distance: '2.8 km',
-    ),
-  ];
-
-  List<ActivityItem> get _filteredItems {
-    if (_selectedFilter == 0) return _allItems;
-    final statusMap = {
-      1: ActivityStatus.active,
-      2: ActivityStatus.completed,
-      3: ActivityStatus.cancelled,
-    };
-    return _allItems
-        .where((e) => e.status == statusMap[_selectedFilter])
-        .toList();
-  }
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: _filters.length, vsync: this);
+    _loadRequests();
   }
 
   @override
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadRequests() async {
+    setState(() => _loading = true);
+    try {
+      final requests = await RequestService.getUserRequests();
+      if (mounted) setState(() => _requests = requests);
+    } catch (_) {
+      // Graceful failure — show empty state
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  List<AmbulanceRequest> get _filtered {
+    switch (_selectedFilter) {
+      case 1: return _requests.where((r) => r.status == RequestStatus.accepted || r.status == RequestStatus.enRoute || r.status == RequestStatus.arrived).toList();
+      case 2: return _requests.where((r) => r.status == RequestStatus.completed).toList();
+      case 3: return _requests.where((r) => r.status == RequestStatus.cancelled).toList();
+      default: return _requests;
+    }
   }
 
   @override
@@ -147,14 +69,17 @@ class _ActivityPageState extends State<ActivityPage>
           children: [
             _buildHeader(),
             _buildFilterTabs(),
-            Expanded(child: _buildActivityList()),
+            Expanded(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+                  : _buildList(),
+            ),
           ],
         ),
       ),
     );
   }
 
-  // header
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
@@ -164,60 +89,21 @@ class _ActivityPageState extends State<ActivityPage>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Activity',
-                  style: GoogleFonts.poppins(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textDark,
-                  ),
-                ),
-                Text(
-                  'Your ambulance booking history',
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w400,
-                    color: AppColors.textGrey,
-                  ),
-                ),
+                Text('Activity', style: GoogleFonts.poppins(fontSize: 26, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                Text('Your ambulance booking history', style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey)),
               ],
             ),
           ),
-          // search button
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.cardBorder),
-            ),
-            child: const Icon(
-              Icons.search_rounded,
-              color: AppColors.textDark,
-              size: 22,
-            ),
-          ),
-          12.widthBox,
-          // filter button
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppColors.cardBorder),
-            ),
-            child: const Icon(
-              Icons.tune_rounded,
-              color: AppColors.textDark,
-              size: 22,
-            ),
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _loadRequests,
+            icon: const Icon(Icons.refresh_rounded, color: AppColors.textDark),
           ),
         ],
       ),
     );
   }
 
-  // filter tabs
   Widget _buildFilterTabs() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 0, 0),
@@ -233,33 +119,18 @@ class _ActivityPageState extends State<ActivityPage>
               onTap: () => setState(() => _selectedFilter = index),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 250),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 8,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                 decoration: BoxDecoration(
                   color: isSelected ? AppColors.primary : AppColors.white,
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.cardBorder,
-                  ),
+                  border: Border.all(color: isSelected ? AppColors.primary : AppColors.cardBorder),
                   boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: AppColors.primary.withValues(alpha: 0.25),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ]
+                      ? [BoxShadow(color: AppColors.primary.withValues(alpha: 0.25), blurRadius: 8, offset: const Offset(0, 3))]
                       : [],
                 ),
                 child: Text(
                   _filters[index],
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: isSelected ? AppColors.white : AppColors.textGrey,
-                  ),
+                  style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: isSelected ? AppColors.white : AppColors.textGrey),
                 ),
               ),
             );
@@ -269,10 +140,8 @@ class _ActivityPageState extends State<ActivityPage>
     );
   }
 
-  // activity list
-  Widget _buildActivityList() {
-    final items = _filteredItems;
-
+  Widget _buildList() {
+    final items = _filtered;
     if (items.isEmpty) {
       return Center(
         child: Column(
@@ -280,71 +149,75 @@ class _ActivityPageState extends State<ActivityPage>
           children: [
             Container(
               padding: const EdgeInsets.all(24),
-              decoration: const BoxDecoration(
-                color: AppColors.primaryLight,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.receipt_long_rounded,
-                size: 40,
-                color: AppColors.primary,
-              ),
+              decoration: const BoxDecoration(color: AppColors.primaryLight, shape: BoxShape.circle),
+              child: const Icon(Icons.receipt_long_rounded, size: 40, color: AppColors.primary),
             ),
             20.heightBox,
-            Text(
-              'No activity found',
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textDark,
-              ),
-            ),
+            Text('No activity found', style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textDark)),
             8.heightBox,
-            Text(
-              'You have no bookings in this category',
-              style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
-            ),
+            Text('You have no bookings in this category', style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey)),
           ],
         ),
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-      physics: const BouncingScrollPhysics(),
-      itemCount: items.length,
-      separatorBuilder: (_, _) => 14.heightBox,
-      itemBuilder: (context, index) => _activityCard(items[index]),
+    return RefreshIndicator(
+      onRefresh: _loadRequests,
+      color: AppColors.primary,
+      child: ListView.separated(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: items.length,
+        separatorBuilder: (_, _) => 14.heightBox,
+        itemBuilder: (context, index) => _requestCard(items[index]),
+      ),
     );
   }
 
-  // card builder
-  Widget _activityCard(ActivityItem item) {
-    final statusConfig = _statusConfig(item.status);
+  Widget _requestCard(AmbulanceRequest req) {
+    final isActive = req.status == RequestStatus.accepted ||
+        req.status == RequestStatus.enRoute ||
+        req.status == RequestStatus.arrived;
+    final isCompleted = req.status == RequestStatus.completed;
+    final isCancelled = req.status == RequestStatus.cancelled;
+
+    Color statusColor;
+    IconData statusIcon;
+    String statusLabel;
+
+    if (isActive) {
+      statusColor = AppColors.primary;
+      statusIcon = Icons.local_hospital_rounded;
+      statusLabel = req.status.label;
+    } else if (isCompleted) {
+      statusColor = AppColors.success;
+      statusIcon = Icons.check_circle_rounded;
+      statusLabel = 'Completed';
+    } else if (isCancelled) {
+      statusColor = AppColors.warning;
+      statusIcon = Icons.cancel_rounded;
+      statusLabel = 'Cancelled';
+    } else {
+      statusColor = Colors.orange;
+      statusIcon = Icons.access_time_rounded;
+      statusLabel = 'Pending';
+    }
 
     return Container(
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.cardBorder),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 4))],
       ),
       child: Column(
         children: [
-          // status indicator
+          // Status bar
           Container(
             height: 4,
             decoration: BoxDecoration(
-              color: statusConfig.color,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(18),
-              ),
+              color: statusColor,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
             ),
           ),
           Padding(
@@ -352,63 +225,29 @@ class _ActivityPageState extends State<ActivityPage>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // booking info
+                // Header row
                 Row(
                   children: [
                     Container(
                       padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: statusConfig.color.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(
-                        statusConfig.icon,
-                        color: statusConfig.color,
-                        size: 20,
-                      ),
+                      decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
+                      child: Icon(statusIcon, color: statusColor, size: 20),
                     ),
                     10.widthBox,
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            item.id,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textGrey,
-                              letterSpacing: 0.5,
-                            ),
-                          ),
+                          Text(req.id.substring(0, 8).toUpperCase(), style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textGrey, letterSpacing: 0.5)),
                           2.heightBox,
-                          Text(
-                            item.date,
-                            style: GoogleFonts.poppins(
-                              fontSize: 11,
-                              color: AppColors.textLight,
-                            ),
-                          ),
+                          Text(_formatDate(req.createdAt), style: GoogleFonts.poppins(fontSize: 11, color: AppColors.textLight)),
                         ],
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: statusConfig.color.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        statusConfig.label,
-                        style: GoogleFonts.poppins(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: statusConfig.color,
-                        ),
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(20)),
+                      child: Text(statusLabel, style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w700, color: statusColor)),
                     ),
                   ],
                 ),
@@ -418,61 +257,29 @@ class _ActivityPageState extends State<ActivityPage>
                   child: Divider(height: 1, color: Color(0xFFEFEFEF)),
                 ),
 
-                // destination details
+                // Route info
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(
-                      Icons.location_on_rounded,
-                      color: AppColors.primary,
-                      size: 18,
-                    ),
+                    const Icon(Icons.location_on_rounded, color: AppColors.primary, size: 18),
                     8.widthBox,
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            item.destination,
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textDark,
-                            ),
-                          ),
+                          Text(req.destinationAddress, style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textDark), maxLines: 1, overflow: TextOverflow.ellipsis),
                           4.heightBox,
-                          Text(
-                            item.address,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: AppColors.textGrey,
-                            ),
-                          ),
+                          Text(req.pickupAddress, style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey), maxLines: 1, overflow: TextOverflow.ellipsis),
                         ],
                       ),
                     ),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        Text(
-                          item.amount > 0
-                              ? 'BDT ${item.amount}'
-                              : 'No charge',
-                          style: GoogleFonts.poppins(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color:
-                                item.amount > 0 ? AppColors.textDark : AppColors.textLight,
-                          ),
-                        ),
+                        Text(req.estimatedFare > 0 ? 'BDT ${req.estimatedFare}' : 'No charge',
+                          style: GoogleFonts.poppins(fontSize: 15, fontWeight: FontWeight.w700, color: req.estimatedFare > 0 ? AppColors.textDark : AppColors.textLight)),
                         4.heightBox,
-                        Text(
-                          item.distance,
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            color: AppColors.textGrey,
-                          ),
-                        ),
+                        Text('${req.distanceKm.toStringAsFixed(1)} km', style: GoogleFonts.poppins(fontSize: 11, color: AppColors.textGrey)),
                       ],
                     ),
                   ],
@@ -480,183 +287,101 @@ class _ActivityPageState extends State<ActivityPage>
 
                 14.heightBox,
 
-                // ride details
+                // Details strip
                 Container(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.background,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.cardBorder),
-                  ),
+                  decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.cardBorder)),
                   child: Row(
                     children: [
-                      _infoChip(
-                        icon: Icons.local_hospital_rounded,
-                        label: item.ambulanceType,
-                        color: AppColors.primary,
-                      ),
+                      _infoChip(icon: Icons.local_hospital_rounded, label: req.ambulanceType, color: AppColors.primary),
                       const Spacer(),
-                      _infoChip(
-                        icon: Icons.person_outline_rounded,
-                        label: item.driver.split(' ').last,
-                        color: const Color(0xFF1565C0),
-                      ),
-                      const Spacer(),
-                      _infoChip(
-                        icon: Icons.directions_car_rounded,
-                        label: item.vehicle,
-                        color: const Color(0xFF2E7D32),
-                      ),
+                      if (req.driverName != null)
+                        _infoChip(icon: Icons.person_outline_rounded, label: req.driverName!.split(' ').last, color: const Color(0xFF1565C0)),
                     ],
                   ),
                 ),
 
-                // eta for active rides
-                if (item.status == ActivityStatus.active && item.eta != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryLight,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.access_time_rounded,
-                            color: AppColors.primary,
-                            size: 16,
-                          ),
-                          8.widthBox,
-                          Text(
-                            'Ambulance arriving in ',
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              color: AppColors.primary,
-                            ),
-                          ),
-                          Text(
-                            item.eta!,
-                            style: GoogleFonts.poppins(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.primary,
-                            ),
-                          ),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.primary,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              'Track',
-                              style: GoogleFonts.poppins(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.white,
-                              ),
-                            ),
-                          ),
-                        ],
+                // Active trip — Track button
+                if (isActive) ...[
+                  12.heightBox,
+                  Row(children: [
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                          builder: (_) => TrackingPage(requestId: req.id, isDriver: false),
+                        )),
+                        icon: const Icon(Icons.my_location_rounded, size: 16),
+                        label: Text('Track Driver', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
                       ),
                     ),
-                  ),
+                    if (req.driverId != null) ...[
+                      12.widthBox,
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                            builder: (_) => ChatPage(
+                              requestId: req.id,
+                              senderRole: SenderRole.user,
+                              senderName: req.userName,
+                              request: req,
+                            ),
+                          )),
+                          icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
+                          label: Text('Chat', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.infoBlue,
+                            side: const BorderSide(color: AppColors.infoBlue),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ]),
+                ],
 
-                // rebook option
-                if (item.status == ActivityStatus.completed)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: GestureDetector(
-                        onTap: () {},
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.primaryLight,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.refresh_rounded,
-                                color: AppColors.primary,
-                                size: 14,
-                              ),
-                              6.widthBox,
-                              Text(
-                                'Rebook',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                            ],
-                          ),
+                // Cancelled — cancel info
+                if (isCancelled) ...[
+                  12.heightBox,
+                  Row(
+                    children: [
+                      const Icon(Icons.info_outline_rounded, size: 14, color: Color(0xFFE65100)),
+                      6.widthBox,
+                      Text('Booking was cancelled', style: GoogleFonts.poppins(fontSize: 12, color: const Color(0xFFE65100))),
+                    ],
+                  ),
+                ],
+
+                // Completed with driver — View Chat history
+                if (isCompleted && req.driverId != null) ...[
+                  12.heightBox,
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => ChatPage(
+                          requestId: req.id,
+                          senderRole: SenderRole.user,
+                          senderName: req.userName,
+                          request: req,
                         ),
+                      )),
+                      icon: const Icon(Icons.chat_bubble_outline_rounded, size: 16),
+                      label: Text('View Chat History', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.infoBlue,
+                        side: const BorderSide(color: AppColors.infoBlue),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),
                   ),
-
-                // cancelled notice
-                if (item.status == ActivityStatus.cancelled)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.info_outline_rounded,
-                          size: 14,
-                          color: Color(0xFFE65100),
-                        ),
-                        6.widthBox,
-                        Text(
-                          'Booking was cancelled',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: const Color(0xFFE65100),
-                          ),
-                        ),
-                        const Spacer(),
-                        GestureDetector(
-                          onTap: () {},
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFFEBEE),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: Text(
-                              'Book Again',
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.primary,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                ],
               ],
             ),
           ),
@@ -665,50 +390,31 @@ class _ActivityPageState extends State<ActivityPage>
     );
   }
 
-  // helper for info chips
-  Widget _infoChip({
-    required IconData icon,
-    required String label,
-    required Color color,
-  }) {
+  Widget _infoChip({required IconData icon, required String label, required Color color}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(icon, size: 13, color: color),
         5.widthBox,
-        Text(
-          label,
-          style: GoogleFonts.poppins(
-            fontSize: 11,
-            fontWeight: FontWeight.w500,
-            color: AppColors.textGrey,
-          ),
-        ),
+        Text(label, style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w500, color: AppColors.textGrey)),
       ],
     );
   }
 
-  // status config
-  StatusConfig _statusConfig(ActivityStatus status) {
-    switch (status) {
-      case ActivityStatus.active:
-        return const StatusConfig(
-          color: AppColors.primary,
-          icon: Icons.local_hospital_rounded,
-          label: 'En Route',
-        );
-      case ActivityStatus.completed:
-        return const StatusConfig(
-          color: Color(0xFF2E7D32),
-          icon: Icons.check_circle_rounded,
-          label: 'Completed',
-        );
-      case ActivityStatus.cancelled:
-        return const StatusConfig(
-          color: Color(0xFFE65100),
-          icon: Icons.cancel_rounded,
-          label: 'Cancelled',
-        );
-    }
+  String _formatDate(DateTime dt) {
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inDays == 0) return 'Today, ${_time(dt)}';
+    if (diff.inDays == 1) return 'Yesterday, ${_time(dt)}';
+    return '${dt.day} ${_month(dt.month)}, ${_time(dt)}';
   }
+
+  String _time(DateTime dt) {
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final m = dt.minute.toString().padLeft(2, '0');
+    final period = dt.hour < 12 ? 'AM' : 'PM';
+    return '$h:$m $period';
+  }
+
+  String _month(int m) => const ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1];
 }

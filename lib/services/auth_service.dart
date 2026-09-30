@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'request_service.dart';
+import 'supabase_service.dart';
+
 class AuthService {
   AuthService({FirebaseAuth? auth, FirebaseFirestore? firestore})
       : _auth = auth ?? FirebaseAuth.instance,
@@ -42,6 +45,7 @@ class AuthService {
       );
     }
 
+    // ── Write to Firebase Firestore ──────────────────────────
     final profile = <String, dynamic>{
       'name': name.trim(),
       'email': email.trim(),
@@ -62,6 +66,41 @@ class AuthService {
     }
 
     await _firestore.collection('users').doc(user.uid).set(profile);
+
+    // ── Sync driver to Supabase drivers table ────────────────
+    if (role == 'driver' && supabaseReady) {
+      try {
+        await RequestService.upsertDriverProfile(
+          firebaseUid: user.uid,
+          name: name.trim(),
+          phone: phone.trim(),
+          vehicleType: vehicleType ?? 'Basic Ambulance',
+          vehicleNumber: vehicleNumber!.trim(),
+        );
+      } catch (e) {
+        // Non-fatal: driver can still log in; profile will sync on next login
+      }
+    }
+
     return credential;
+  }
+
+  /// Called on login for drivers — ensures their Supabase row is up to date.
+  static Future<void> syncDriverOnLogin({
+    required String firebaseUid,
+    required Map<String, dynamic> firestoreData,
+  }) async {
+    if (!supabaseReady) return;
+    final role = firestoreData['role'] ?? 'user';
+    if (role != 'driver') return;
+    try {
+      await RequestService.upsertDriverProfile(
+        firebaseUid: firebaseUid,
+        name: firestoreData['name'] ?? '',
+        phone: firestoreData['phone'] ?? '',
+        vehicleType: firestoreData['vehicleType'] ?? 'Basic Ambulance',
+        vehicleNumber: firestoreData['vehicleNumber'] ?? '',
+      );
+    } catch (_) {}
   }
 }
