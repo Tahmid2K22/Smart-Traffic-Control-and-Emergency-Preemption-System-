@@ -85,7 +85,8 @@ class AuthService {
     return credential;
   }
 
-  /// Called on login for drivers — ensures their Supabase row is up to date.
+  /// Called on login for drivers — ensures their Supabase row is up to date,
+  /// including the admin-set `isApproved` flag from Firestore.
   static Future<void> syncDriverOnLogin({
     required String firebaseUid,
     required Map<String, dynamic> firestoreData,
@@ -96,10 +97,11 @@ class AuthService {
     try {
       await RequestService.upsertDriverProfile(
         firebaseUid: firebaseUid,
-        name: firestoreData['name'] ?? '',
-        phone: firestoreData['phone'] ?? '',
-        vehicleType: firestoreData['vehicleType'] ?? 'Basic Ambulance',
-        vehicleNumber: firestoreData['vehicleNumber'] ?? '',
+        name: firestoreData['name'] as String? ?? '',
+        phone: firestoreData['phone'] as String? ?? '',
+        vehicleType: firestoreData['vehicleType'] as String? ?? 'Basic Ambulance',
+        vehicleNumber: firestoreData['vehicleNumber'] as String? ?? '',
+        isApproved: firestoreData['isApproved'] == true,
       );
     } catch (_) {}
   }

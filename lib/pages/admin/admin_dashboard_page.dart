@@ -369,10 +369,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: card.bgColor,
+              color: Colors.transparent,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(card.icon, color: card.color, size: 20),
+            child: Icon(card.icon, color: card.color, size: 24),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -466,9 +466,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: AppColors.successLight,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
+        border: Border.all(color: AppColors.cardBorder),
       ),
       child: Row(
         children: [
@@ -588,11 +588,11 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.warningLight),
+        border: Border.all(color: AppColors.cardBorder),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 6,
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 4,
           ),
         ],
       ),
@@ -601,12 +601,12 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.warningLight,
+              color: AppColors.background,
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(
-              Icons.local_taxi_rounded,
-              color: AppColors.warning,
+              Icons.person_rounded,
+              color: AppColors.textGrey,
               size: 20,
             ),
           ),
