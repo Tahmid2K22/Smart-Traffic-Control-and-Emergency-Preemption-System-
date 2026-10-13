@@ -101,27 +101,18 @@ class _DriversManagementPageState extends State<DriversManagementPage> {
                   vertical: 8,
                 ),
                 decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primary : AppColors.white,
+                  color: isSelected ? AppColors.primaryLight : Colors.transparent,
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: isSelected ? AppColors.primary : AppColors.cardBorder,
                   ),
-                  boxShadow: isSelected
-                      ? [
-                          BoxShadow(
-                            color: AppColors.primary.withValues(alpha: 0.25),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ]
-                      : [],
                 ),
                 child: Text(
                   _filters[index],
                   style: GoogleFonts.poppins(
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                    color: isSelected ? AppColors.white : AppColors.textGrey,
+                    color: isSelected ? AppColors.primary : AppColors.textGrey,
                   ),
                 ),
               ),
@@ -248,13 +239,13 @@ class _DriverCardState extends State<_DriverCard> {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.cardBorder),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -262,7 +253,7 @@ class _DriverCardState extends State<_DriverCard> {
         children: [
           // top color indicator bar
           Container(
-            height: 4,
+            height: 2,
             decoration: BoxDecoration(
               color: statusColor,
               borderRadius: const BorderRadius.vertical(
@@ -281,12 +272,12 @@ class _DriverCardState extends State<_DriverCard> {
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.1),
+                        color: AppColors.background,
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Icon(
+                      child: const Icon(
                         Icons.person_rounded,
-                        color: statusColor,
+                        color: AppColors.textGrey,
                         size: 20,
                       ),
                     ),
@@ -320,7 +311,8 @@ class _DriverCardState extends State<_DriverCard> {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: statusColor.withValues(alpha: 0.1),
+                        color: Colors.transparent,
+                        border: Border.all(color: statusColor),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
@@ -403,7 +395,7 @@ class _DriverCardState extends State<_DriverCard> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: AppColors.background,
+                    color: Colors.transparent,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppColors.cardBorder),
                   ),
@@ -519,11 +511,12 @@ class _ActionButton extends StatelessWidget {
         ),
       ),
       style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: Colors.white,
+        backgroundColor: Colors.white,
+        foregroundColor: color,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: color.withValues(alpha: 0.5)),
         ),
         padding: const EdgeInsets.symmetric(vertical: 10),
       ),
