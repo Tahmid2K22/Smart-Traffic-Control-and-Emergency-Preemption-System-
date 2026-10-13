@@ -207,7 +207,10 @@ class _DriverCardState extends State<_DriverCard> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(ctx);
-              _doAction(() => widget.adminService.deleteUser(widget.uid));
+              _doAction(() => widget.adminService.deleteUser(
+                    widget.uid,
+                    name: (widget.data['name'] as String?) ?? '',
+                  ));
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
@@ -437,8 +440,8 @@ class _DriverCardState extends State<_DriverCard> {
                           color: isApproved ? AppColors.warning : AppColors.success,
                           onTap: () => _doAction(
                             () => isApproved
-                                ? widget.adminService.rejectDriver(widget.uid)
-                                : widget.adminService.verifyDriver(widget.uid),
+                                ? widget.adminService.rejectDriver(widget.uid, name: name)
+                                : widget.adminService.verifyDriver(widget.uid, name: name),
                           ),
                         ),
                       ),
