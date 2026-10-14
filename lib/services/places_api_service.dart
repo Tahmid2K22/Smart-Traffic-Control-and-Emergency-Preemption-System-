@@ -41,11 +41,12 @@ class PlacesApiService {
     return raw == null ? null : _decodePlace(raw);
   }
 
-  Future<List<NearbyPlaceResult>> nearby({required LatLng center, required String type}) async {
+  Future<List<NearbyPlaceResult>> nearby({required LatLng center, required String type, required double radiusMeters}) async {
     final raw = await _channel.invokeMethod<Map<dynamic, dynamic>>('nearby', <String, dynamic>{
       'type': type,
       'latitude': center.latitude,
       'longitude': center.longitude,
+      'radiusMeters': radiusMeters,
     });
     final places = raw?['places'] as List<dynamic>? ?? const [];
     final results = places.whereType<Map<dynamic, dynamic>>().map(_decodePlace).toList();
