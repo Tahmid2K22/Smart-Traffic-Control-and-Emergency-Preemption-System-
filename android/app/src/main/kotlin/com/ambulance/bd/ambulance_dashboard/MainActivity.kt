@@ -29,7 +29,7 @@ class MainActivity : FlutterActivity() {
 				when (call.method) {
 					"autocomplete" -> autocomplete(call.argument<String>("query") ?: "", call.argument<Double>("latitude") ?: 0.0, call.argument<Double>("longitude") ?: 0.0, result)
 					"details" -> details(call.argument<String>("placeId") ?: "", result)
-					"nearby" -> nearby(call.argument<String>("type") ?: "", call.argument<Double>("latitude") ?: 0.0, call.argument<Double>("longitude") ?: 0.0, result)
+					"nearby" -> nearby(call.argument<String>("type") ?: "", call.argument<Double>("latitude") ?: 0.0, call.argument<Double>("longitude") ?: 0.0, call.argument<Double>("radiusMeters") ?: 15000.0, result)
 					else -> result.notImplemented()
 				}
 			}
@@ -57,9 +57,9 @@ class MainActivity : FlutterActivity() {
 			.addOnFailureListener { error -> result.error("DETAILS_FAILED", error.message, null) }
 	}
 
-	private fun nearby(type: String, latitude: Double, longitude: Double, result: MethodChannel.Result) {
+	private fun nearby(type: String, latitude: Double, longitude: Double, radiusMeters: Double, result: MethodChannel.Result) {
 		val fields = listOf(Place.Field.ID, Place.Field.NAME, Place.Field.ADDRESS, Place.Field.LAT_LNG, Place.Field.TYPES, Place.Field.OPENING_HOURS)
-		val request = SearchNearbyRequest.builder(CircularBounds.newInstance(LatLng(latitude, longitude), 30000.0), fields)
+		val request = SearchNearbyRequest.builder(CircularBounds.newInstance(LatLng(latitude, longitude), radiusMeters), fields)
 			.setIncludedTypes(listOf(type))
 			.setRankPreference(SearchNearbyRequest.RankPreference.DISTANCE)
 			.setMaxResultCount(20)
