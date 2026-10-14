@@ -9,6 +9,8 @@ import '../../constants/colors.dart';
 import '../../services/admin_service.dart';
 import 'drivers_management_page.dart';
 import 'users_management_page.dart';
+import 'hospitals_management_page.dart';
+import 'admin_activity_log_page.dart';
 
 class AdminDashboardPage extends StatefulWidget {
   const AdminDashboardPage({super.key});
@@ -28,12 +30,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     'totalDrivers': 0,
     'pendingDrivers': 0,
     'totalAdmins': 0,
+    'totalHospitals': 0,
+    'pendingHospitals': 0,
   };
   bool _statsLoading = true;
 
   @override
   void initState() {
-    super.initState();
     super.initState();
     _loadAdminName();
     _loadStats();
@@ -62,7 +65,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     }
   }
 
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -79,6 +81,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   _buildOverviewTab(),
                   const DriversManagementPage(),
                   const UsersManagementPage(),
+                  const HospitalsManagementPage(),
+                  const AdminActivityLogPage(),
                 ],
               ),
             ),
@@ -142,30 +146,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   ],
                 ),
               ),
-              // add dummy driver (temporary)
-              IconButton(
-                onPressed: () async {
-                  await FirebaseFirestore.instance.collection('users').add({
-                    'name': 'Dummy Driver',
-                    'email': 'dummy@driver.com',
-                    'phone': '+8801900000000',
-                    'role': 'driver',
-                    'isApproved': false,
-                    'city': 'Khulna',
-                    'vehicleType': 'Basic Life Support',
-                    'vehicleNumber': 'KHU-DUMMY-123',
-                    'drivingLicense': 'DL-DUMMY-001',
-                    'createdAt': FieldValue.serverTimestamp(),
-                  });
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Dummy Driver Added!')),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.add_box_rounded, color: Colors.white),
-              ),
-              12.widthBox,
               // logout
               GestureDetector(
                 onTap: _showLogoutDialog,
@@ -189,7 +169,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // bottom nav bar
+  // bottom nav bar — 5 tabs
   Widget _buildBottomNav() {
     return Container(
       decoration: BoxDecoration(
@@ -204,12 +184,12 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
       ),
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
           child: GNav(
-            gap: 8,
+            gap: 6,
             activeColor: AppColors.primary,
-            iconSize: 22,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            iconSize: 20,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
             duration: const Duration(milliseconds: 400),
             tabBackgroundColor: AppColors.primaryLight,
             color: AppColors.textLight,
@@ -218,7 +198,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                 icon: Icons.dashboard_rounded,
                 text: 'Overview',
                 textStyle: GoogleFonts.poppins(
-                  fontSize: 13,
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
                   color: AppColors.primary,
                 ),
@@ -227,7 +207,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                 icon: Icons.local_taxi_rounded,
                 text: 'Drivers',
                 textStyle: GoogleFonts.poppins(
-                  fontSize: 13,
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
                   color: AppColors.primary,
                 ),
@@ -236,7 +216,25 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                 icon: Icons.people_rounded,
                 text: 'Users',
                 textStyle: GoogleFonts.poppins(
-                  fontSize: 13,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+              GButton(
+                icon: Icons.local_hospital_rounded,
+                text: 'Hospitals',
+                textStyle: GoogleFonts.poppins(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+              GButton(
+                icon: Icons.history_rounded,
+                text: 'Logs',
+                textStyle: GoogleFonts.poppins(
+                  fontSize: 11,
                   fontWeight: FontWeight.w600,
                   color: AppColors.primary,
                 ),
@@ -298,7 +296,28 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
             _buildStatsGrid(),
           28.heightBox,
           // pending drivers preview
-          _buildPendingSection(),
+          _buildPendingSection(
+            title: 'Pending Driver Verifications',
+            stream: _adminService.pendingDriversStream(),
+            onSeeAll: () => setState(() => _selectedTab = 1),
+            tileBuilder: (doc) => _PendingDriverTile(
+              uid: doc.id,
+              data: doc.data() as Map<String, dynamic>,
+              adminService: _adminService,
+            ),
+          ),
+          24.heightBox,
+          // pending hospitals preview
+          _buildPendingSection(
+            title: 'Pending Hospital Approvals',
+            stream: _adminService.pendingHospitalsStream(),
+            onSeeAll: () => setState(() => _selectedTab = 3),
+            tileBuilder: (doc) => _PendingHospitalTile(
+              id: doc.id,
+              data: doc.data() as Map<String, dynamic>,
+              adminService: _adminService,
+            ),
+          ),
         ],
       ),
     );
@@ -321,11 +340,25 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
         bgColor: AppColors.successLight,
       ),
       _StatCardData(
-        title: 'Pending',
+        title: 'Pending Drivers',
         value: _stats['pendingDrivers'] ?? 0,
         icon: Icons.pending_actions_rounded,
         color: AppColors.warning,
         bgColor: AppColors.warningLight,
+      ),
+      _StatCardData(
+        title: 'Hospitals',
+        value: _stats['totalHospitals'] ?? 0,
+        icon: Icons.local_hospital_rounded,
+        color: AppColors.primary,
+        bgColor: AppColors.primaryLight,
+      ),
+      _StatCardData(
+        title: 'Pending Hospitals',
+        value: _stats['pendingHospitals'] ?? 0,
+        icon: Icons.hourglass_top_rounded,
+        color: const Color(0xFF6A1B9A),
+        bgColor: const Color(0xFFF3E5F5),
       ),
       _StatCardData(
         title: 'Admins',
@@ -369,10 +402,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: card.bgColor,
+              color: Colors.transparent,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(card.icon, color: card.color, size: 20),
+            child: Icon(card.icon, color: card.color, size: 24),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -401,8 +434,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // shows pending drivers at a glance
-  Widget _buildPendingSection() {
+  // Generic pending section builder
+  Widget _buildPendingSection({
+    required String title,
+    required Stream<QuerySnapshot> stream,
+    required VoidCallback onSeeAll,
+    required Widget Function(QueryDocumentSnapshot doc) tileBuilder,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -410,7 +448,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              'Pending Verifications',
+              title,
               style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
@@ -418,7 +456,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
               ),
             ),
             TextButton(
-              onPressed: () => setState(() => _selectedTab = 1),
+              onPressed: onSeeAll,
               child: Text(
                 'See All',
                 style: GoogleFonts.poppins(
@@ -431,8 +469,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           ],
         ),
         8.heightBox,
-        StreamBuilder(
-          stream: _adminService.pendingDriversStream(),
+        StreamBuilder<QuerySnapshot>(
+          stream: stream,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
@@ -445,16 +483,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: docs.length > 3 ? 3 : docs.length,
-              separatorBuilder: (context, index) => 10.heightBox,
-              itemBuilder: (context, index) {
-                final data =
-                    docs[index].data() as Map<String, dynamic>;
-                return _PendingDriverTile(
-                  uid: docs[index].id,
-                  data: data,
-                  adminService: _adminService,
-                );
-              },
+              separatorBuilder: (_, _) => 10.heightBox,
+              itemBuilder: (context, index) => tileBuilder(docs[index]),
             );
           },
         ),
@@ -466,9 +496,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: AppColors.successLight,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.success.withValues(alpha: 0.3)),
+        border: Border.all(color: AppColors.cardBorder),
       ),
       child: Row(
         children: [
@@ -488,7 +518,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   ),
                 ),
                 Text(
-                  'No pending driver verifications',
+                  'No pending items',
                   style: GoogleFonts.poppins(
                     fontSize: 12,
                     color: AppColors.success,
@@ -543,7 +573,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
   }
 }
 
-// compact tile shown in the overview pending list
+// ── Pending Driver Tile (overview) ─────────────────────────────────────────────
+
 class _PendingDriverTile extends StatefulWidget {
   final String uid;
   final Map<String, dynamic> data;
@@ -588,11 +619,11 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.warningLight),
+        border: Border.all(color: AppColors.cardBorder),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 6,
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 4,
           ),
         ],
       ),
@@ -601,12 +632,12 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppColors.warningLight,
+              color: AppColors.background,
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(
-              Icons.local_taxi_rounded,
-              color: AppColors.warning,
+              Icons.person_rounded,
+              color: AppColors.textGrey,
               size: 20,
             ),
           ),
@@ -642,20 +673,159 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
           else
             Row(
               children: [
-                // approve
                 _iconAction(
                   icon: Icons.check_circle_rounded,
                   color: AppColors.success,
-                  onTap: () =>
-                      _doAction(() => widget.adminService.verifyDriver(widget.uid)),
+                  onTap: () => _doAction(() => widget.adminService
+                      .verifyDriver(widget.uid, name: name)),
                 ),
                 6.widthBox,
-                // reject
                 _iconAction(
                   icon: Icons.cancel_rounded,
                   color: Colors.red,
-                  onTap: () =>
-                      _doAction(() => widget.adminService.rejectDriver(widget.uid)),
+                  onTap: () => _doAction(() => widget.adminService
+                      .rejectDriver(widget.uid, name: name)),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _iconAction({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return IconButton(
+      onPressed: onTap,
+      icon: Icon(icon, size: 20),
+      style: IconButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Pending Hospital Tile (overview) ──────────────────────────────────────────
+
+class _PendingHospitalTile extends StatefulWidget {
+  final String id;
+  final Map<String, dynamic> data;
+  final AdminService adminService;
+
+  const _PendingHospitalTile({
+    required this.id,
+    required this.data,
+    required this.adminService,
+  });
+
+  @override
+  State<_PendingHospitalTile> createState() => _PendingHospitalTileState();
+}
+
+class _PendingHospitalTileState extends State<_PendingHospitalTile> {
+  bool _loading = false;
+
+  Future<void> _doAction(Future<void> Function() action) async {
+    setState(() => _loading = true);
+    try {
+      await action();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String name = widget.data['name'] as String? ?? 'Unknown';
+    final String city = widget.data['city'] as String? ?? '–';
+    final int beds = (widget.data['beds'] as num?)?.toInt() ?? 0;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.cardBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 4,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.primaryLight,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.local_hospital_rounded,
+              color: AppColors.primary,
+              size: 20,
+            ),
+          ),
+          12.widthBox,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textDark,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '$city  •  $beds beds',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: AppColors.textGrey,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_loading)
+            const SizedBox(
+              height: 24,
+              width: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Row(
+              children: [
+                _iconAction(
+                  icon: Icons.check_circle_rounded,
+                  color: AppColors.success,
+                  onTap: () => _doAction(() => widget.adminService
+                      .approveHospital(widget.id, name: name)),
+                ),
+                6.widthBox,
+                _iconAction(
+                  icon: Icons.cancel_rounded,
+                  color: Colors.red,
+                  onTap: () => _doAction(() => widget.adminService
+                      .rejectHospital(widget.id, name: name)),
                 ),
               ],
             ),

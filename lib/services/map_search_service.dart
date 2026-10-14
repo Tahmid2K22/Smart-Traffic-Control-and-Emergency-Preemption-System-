@@ -41,12 +41,14 @@ class MapSearchService {
       },
     );
     final response = await http.get(uri, headers: {'User-Agent': _userAgent});
-    if (response.statusCode != 200)
+    if (response.statusCode != 200) {
       throw HttpException('Nominatim returned ${response.statusCode}.');
+    }
 
     final data = jsonDecode(response.body);
-    if (data is! List)
+    if (data is! List) {
       throw const FormatException('Invalid Nominatim response.');
+    }
     return data.whereType<Map<String, dynamic>>().map((item) {
       final latitude = double.tryParse(item['lat']?.toString() ?? '');
       final longitude = double.tryParse(item['lon']?.toString() ?? '');
@@ -76,8 +78,9 @@ class MapSearchService {
       <String, String>{'overview': 'full', 'geometries': 'geojson'},
     );
     final response = await http.get(uri, headers: {'User-Agent': _userAgent});
-    if (response.statusCode != 200)
+    if (response.statusCode != 200) {
       throw HttpException('OSRM returned ${response.statusCode}.');
+    }
 
     final data = jsonDecode(response.body);
     final routes = data is Map<String, dynamic> ? data['routes'] : null;
@@ -110,8 +113,9 @@ class MapSearchService {
         (coordinate[0] as num).toDouble(),
       );
     }).toList();
-    if (points.isEmpty)
+    if (points.isEmpty) {
       throw const FormatException('OSRM route has no geometry.');
+    }
 
     return DrivingRoute(
       points: points,

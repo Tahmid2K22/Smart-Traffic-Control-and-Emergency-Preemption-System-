@@ -13,6 +13,7 @@ import 'pages/activity_page.dart';
 import 'pages/profile_page.dart';
 import 'pages/login_page.dart';
 import 'pages/driver/driver_dashboard_page.dart';
+import 'pages/admin/admin_dashboard_page.dart';
 import 'models/request_model.dart';
 import 'services/request_service.dart';
 import 'constants/app_config.dart';
@@ -119,9 +120,17 @@ class AuthGate extends StatelessWidget {
                 body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
               );
             }
-            final role = (roleSnap.data?.data() as Map<String, dynamic>?)?['role'] ?? 'user';
+            final data = (roleSnap.data?.data() as Map<String, dynamic>?) ?? {};
+            final role = data['role'] as String? ?? 'user';
+
+            if (role == 'admin') {
+              return const AdminDashboardPage();
+            }
             if (role == 'driver') {
-              return _DriverGate(firebaseUid: snapshot.data!.uid);
+              return _DriverGate(
+                firebaseUid: snapshot.data!.uid,
+                firestoreData: data,
+              );
             }
             return const DashboardPage();
           },
@@ -131,10 +140,12 @@ class AuthGate extends StatelessWidget {
   }
 }
 
-/// Loads or creates the driver's Supabase profile, then shows [DriverDashboardPage].
+/// Loads or creates the driver's Supabase profile, checks approval, then shows
+/// [DriverDashboardPage] or a pending-approval screen.
 class _DriverGate extends StatefulWidget {
-  const _DriverGate({required this.firebaseUid});
+  const _DriverGate({required this.firebaseUid, required this.firestoreData});
   final String firebaseUid;
+  final Map<String, dynamic> firestoreData;
 
   @override
   State<_DriverGate> createState() => _DriverGateState();
@@ -142,6 +153,7 @@ class _DriverGate extends StatefulWidget {
 
 class _DriverGateState extends State<_DriverGate> {
   DriverProfile? _profile;
+  bool _loading = true;
 
   @override
   void initState() {
@@ -150,33 +162,38 @@ class _DriverGateState extends State<_DriverGate> {
   }
 
   Future<void> _loadDriver() async {
-    DriverProfile? profile = await RequestService.getMyDriverProfile();
-    if (profile == null) {
-      // Sync from Firestore → Supabase drivers table on first login
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(widget.firebaseUid)
-          .get();
-      final data = doc.data() ?? {};
-      await RequestService.upsertDriverProfile(
-        firebaseUid: widget.firebaseUid,
-        name: data['name'] ?? 'Driver',
-        phone: data['phone'] ?? '',
-        vehicleType: data['vehicleType'] ?? 'Basic',
-        vehicleNumber: data['vehicleNumber'] ?? '',
-      );
-      profile = await RequestService.getMyDriverProfile();
-    }
-    if (mounted) setState(() => _profile = profile);
+    final data = widget.firestoreData;
+    final isApprovedInFirestore = data['isApproved'] == true;
+
+    // Upsert driver profile, including approval status from Firestore
+    await RequestService.upsertDriverProfile(
+      firebaseUid: widget.firebaseUid,
+      name: data['name'] as String? ?? 'Driver',
+      phone: data['phone'] as String? ?? '',
+      vehicleType: data['vehicleType'] as String? ?? 'Basic',
+      vehicleNumber: data['vehicleNumber'] as String? ?? '',
+      isApproved: isApprovedInFirestore,
+    );
+
+    final profile = await RequestService.getMyDriverProfile();
+    if (mounted) setState(() { _profile = profile; _loading = false; });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_profile == null) {
+    if (_loading) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
       );
     }
+
+    // Not yet approved — show a holding screen
+    if (_profile == null || !_profile!.isApproved) {
+      return _PendingApprovalScreen(
+        driverName: widget.firestoreData['name'] as String? ?? 'Driver',
+      );
+    }
+
     return DriverDashboardPage(driver: _profile!);
   }
 }
@@ -263,6 +280,108 @@ class _DashboardPageState extends State<DashboardPage> {
             ],
             selectedIndex: _selectedTab,
             onTabChange: (index) => setState(() => _selectedTab = index),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Pending approval holding screen ──────────────────────────────────────────
+
+class _PendingApprovalScreen extends StatelessWidget {
+  const _PendingApprovalScreen({required this.driverName});
+  final String driverName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Icon
+              Container(
+                width: 110,
+                height: 110,
+                decoration: BoxDecoration(
+                  color: AppColors.warningLight,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.pending_actions_rounded,
+                  size: 56,
+                  color: AppColors.warning,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Text(
+                'Account Pending Approval',
+                style: GoogleFonts.poppins(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Hi $driverName, your driver account is under review.\n\nAn admin will verify your credentials and approve your account shortly.',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: AppColors.textGrey,
+                  height: 1.6,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 40),
+              // Status badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.warningLight,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.hourglass_top_rounded, color: AppColors.warning, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Status: Pending',
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.warning,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 40),
+              // Logout button
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => FirebaseAuth.instance.signOut(),
+                  icon: const Icon(Icons.logout_rounded),
+                  label: Text(
+                    'Logout',
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textGrey,
+                    side: const BorderSide(color: AppColors.cardBorder),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
