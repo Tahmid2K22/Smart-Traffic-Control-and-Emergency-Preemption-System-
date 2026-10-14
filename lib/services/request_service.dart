@@ -13,20 +13,24 @@ class RequestService {
   // ── Driver helpers ──────────────────────────────────────────────────────────
 
   /// Upserts a driver row in Supabase when a driver logs in or registers.
+  /// [isApproved] mirrors the Firestore `isApproved` field so the Supabase
+  /// `is_approved` column is always in sync with admin decisions.
   static Future<void> upsertDriverProfile({
     required String firebaseUid,
     required String name,
     required String phone,
     required String vehicleType,
     required String vehicleNumber,
+    bool isApproved = false,
   }) async {
     if (!supabaseReady) return;
     await sb.from(SupabaseTables.drivers).upsert({
-      'firebase_uid':    firebaseUid,
-      'name':            name,
-      'phone':           phone,
-      'vehicle_type':    vehicleType,
-      'vehicle_number':  vehicleNumber,
+      'firebase_uid':   firebaseUid,
+      'name':           name,
+      'phone':          phone,
+      'vehicle_type':   vehicleType,
+      'vehicle_number': vehicleNumber,
+      'is_approved':    isApproved,
     }, onConflict: 'firebase_uid');
   }
 

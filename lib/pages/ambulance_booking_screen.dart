@@ -11,8 +11,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../constants/colors.dart';
+import '../models/models.dart';
 import '../services/map_search_service.dart';
 import '../services/request_service.dart';
+import '../services/hospital_service.dart';
 import 'tracking_page.dart';
 
 class AmbulanceBookingScreen extends StatefulWidget {
@@ -106,8 +108,9 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       permission = await Geolocator.requestPermission();
     }
     if (permission == LocationPermission.denied ||
-        permission == LocationPermission.deniedForever)
+        permission == LocationPermission.deniedForever) {
       return;
+    }
 
     final position = await Geolocator.getCurrentPosition(
       locationSettings: const LocationSettings(
@@ -183,8 +186,9 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       await _mapController?.animateCamera(CameraUpdate.newLatLng(point));
       await _optimizeRoute();
     } on Exception {
-      if (mounted)
+      if (mounted) {
         _showMessage('Location not found. Try a more specific address.');
+      }
     } finally {
       if (mounted) setState(() => _isSearching = false);
     }
@@ -294,8 +298,9 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
         _showMessage('Unable to calculate the driving route right now.');
       }
     } finally {
-      if (mounted && requestId == _routeRequestId)
+      if (mounted && requestId == _routeRequestId) {
         setState(() => _isRouting = false);
+      }
     }
   }
 
@@ -497,6 +502,15 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
                 onSelected: (index) =>
                     setState(() => _selectedAmbulance = index),
                 onRequest: _requestAmbulance,
+                onHospitalSelected: (hospital) {
+                  final point = LatLng(hospital.lat, hospital.lon);
+                  setState(() {
+                    _destination = point;
+                    _mapCenter = point;
+                    _destinationController.text = hospital.name;
+                  });
+                  _mapController?.animateCamera(CameraUpdate.newLatLng(point));
+                },
               ),
             ),
         ],
@@ -527,6 +541,8 @@ class _TripPlanningSheet extends StatelessWidget {
     required this.onSetDestinationOnMap,
     required this.onSelected,
     required this.onRequest,
+    // hospital destination
+    required this.onHospitalSelected,
   });
 
   final ScrollController scrollController;
@@ -549,6 +565,7 @@ class _TripPlanningSheet extends StatelessWidget {
   final VoidCallback onSetDestinationOnMap;
   final ValueChanged<int> onSelected;
   final VoidCallback onRequest;
+  final void Function(HospitalModel) onHospitalSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -660,25 +677,9 @@ class _TripPlanningSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          const Text(
-            'Recent locations',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textDark,
-            ),
-          ),
-          _RecentLocation(
-            title: 'Square Hospital',
-            subtitle: '18/F, Panthapath, Dhaka',
-            onTap: () => onRecentSelected('Square Hospital, Panthapath, Dhaka'),
-          ),
-          _RecentLocation(
-            title: 'Dhaka Medical College',
-            subtitle: 'Secretariat Road, Dhaka',
-            onTap: () =>
-                onRecentSelected('Dhaka Medical College Hospital, Dhaka'),
-          ),
+          const Text('Recent locations', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+          _RecentLocation(title: 'Square Hospital', subtitle: '18/F, Panthapath, Dhaka', onTap: () => onRecentSelected('Square Hospital, Panthapath, Dhaka')),
+          _RecentLocation(title: 'Dhaka Medical College', subtitle: 'Secretariat Road, Dhaka', onTap: () => onRecentSelected('Dhaka Medical College Hospital, Dhaka')),
           const SizedBox(height: 12),
           const Text(
             'Choose ambulance type',
@@ -917,34 +918,12 @@ class _QuickAction extends StatelessWidget {
 }
 
 class _RecentLocation extends StatelessWidget {
-  const _RecentLocation({
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
+  const _RecentLocation({required this.title, required this.subtitle, required this.onTap});
   final String title;
   final String subtitle;
   final VoidCallback onTap;
   @override
-  Widget build(BuildContext context) => ListTile(
-    onTap: onTap,
-    contentPadding: EdgeInsets.zero,
-    dense: true,
-    leading: const Icon(Icons.history_rounded, color: AppColors.textLight),
-    title: Text(
-      title,
-      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-    ),
-    subtitle: Text(
-      subtitle,
-      style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
-    ),
-    trailing: const Icon(
-      Icons.north_west_rounded,
-      size: 17,
-      color: AppColors.textLight,
-    ),
-  );
+  Widget build(BuildContext context) => ListTile(onTap: onTap, contentPadding: EdgeInsets.zero, dense: true, leading: const Icon(Icons.history_rounded, color: AppColors.textLight), title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)), subtitle: Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textGrey)), trailing: const Icon(Icons.north_west_rounded, size: 17, color: AppColors.textLight));
 }
 
 class _TierCard extends StatelessWidget {
@@ -1069,4 +1048,156 @@ class _AmbulanceTier {
   final int perKm;
   final IconData icon;
   final Color color;
+}
+
+// ── Approved hospital list (live Firestore stream) ────────────────────────────
+
+class _ApprovedHospitalList extends StatefulWidget {
+  const _ApprovedHospitalList({required this.onSelected});
+  final void Function(HospitalModel) onSelected;
+
+  @override
+  State<_ApprovedHospitalList> createState() => _ApprovedHospitalListState();
+}
+
+class _ApprovedHospitalListState extends State<_ApprovedHospitalList> {
+  final _service = HospitalService();
+  String? _selectedId;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder(
+      stream: _service.approvedHospitalsStream(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: LinearProgressIndicator(minHeight: 2, color: AppColors.primary),
+          );
+        }
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.cardBorder),
+            ),
+            child: const Text(
+              'No approved hospitals available yet.',
+              style: TextStyle(fontSize: 12, color: AppColors.textGrey),
+            ),
+          );
+        }
+        final hospitals =
+            docs.map((d) => HospitalModel.fromDoc(d)).toList();
+        return Column(
+          children: hospitals.map((h) {
+            final isSelected = _selectedId == h.id;
+            return GestureDetector(
+              onTap: () {
+                setState(() => _selectedId = h.id);
+                widget.onSelected(h);
+              },
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? AppColors.primary.withValues(alpha: 0.06)
+                      : AppColors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: isSelected
+                        ? AppColors.primary
+                        : AppColors.cardBorder,
+                    width: isSelected ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryLight,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.local_hospital_rounded,
+                        color: AppColors.primary,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            h.name,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textDark,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${h.city}  •  ${h.beds} beds',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textGrey,
+                            ),
+                          ),
+                          if (h.services.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Wrap(
+                                spacing: 4,
+                                children: h.services.take(3).map((s) {
+                                  return Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 7, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primary
+                                          .withValues(alpha: 0.08),
+                                      borderRadius:
+                                          BorderRadius.circular(20),
+                                    ),
+                                    child: Text(
+                                      s,
+                                      style: const TextStyle(
+                                          fontSize: 9,
+                                          color: AppColors.primary),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      isSelected
+                          ? Icons.check_circle_rounded
+                          : Icons.radio_button_unchecked_rounded,
+                      color: isSelected
+                          ? AppColors.primary
+                          : AppColors.textLight,
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
 }

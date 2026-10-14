@@ -161,13 +161,12 @@ class _UserCardState extends State<_UserCard> {
           color: isAdmin
               ? AppColors.primary.withValues(alpha: 0.3)
               : AppColors.cardBorder,
-          width: isAdmin ? 1.5 : 1,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -184,7 +183,7 @@ class _UserCardState extends State<_UserCard> {
                   height: 48,
                   decoration: const BoxDecoration(
                     shape: BoxShape.circle,
-                    color: AppColors.primary,
+                    color: AppColors.background,
                   ),
                   child: Center(
                     child: Text(
@@ -192,7 +191,7 @@ class _UserCardState extends State<_UserCard> {
                       style: GoogleFonts.poppins(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                        color: AppColors.textGrey,
                       ),
                     ),
                   ),
@@ -328,7 +327,8 @@ class _RoleBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: isAdmin ? const Color(0xFFFFF3E0) : AppColors.primaryLight,
+        color: Colors.transparent,
+        border: Border.all(color: isAdmin ? AppColors.accentOrange : AppColors.primary),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -377,10 +377,13 @@ class _ActionButton extends StatelessWidget {
         style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600),
       ),
       style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: Colors.white,
+        backgroundColor: Colors.white,
+        foregroundColor: color,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: color.withValues(alpha: 0.5)),
+        ),
         padding: const EdgeInsets.symmetric(vertical: 10),
       ),
     );
