@@ -14,6 +14,8 @@ import 'pages/profile_page.dart';
 import 'pages/login_page.dart';
 import 'pages/driver/driver_dashboard_page.dart';
 import 'pages/admin/admin_dashboard_page.dart';
+import 'pages/traffic/pending_verification_screen.dart';
+import 'pages/traffic/traffic_police_dashboard.dart';
 import 'models/request_model.dart';
 import 'services/request_service.dart';
 import 'constants/app_config.dart';
@@ -109,11 +111,11 @@ class AuthGate extends StatelessWidget {
           return const LoginPage();
         }
         // Role-based routing: check Firestore role
-        return FutureBuilder<DocumentSnapshot>(
-          future: FirebaseFirestore.instance
+        return StreamBuilder<DocumentSnapshot>(
+          stream: FirebaseFirestore.instance
               .collection('users')
               .doc(snapshot.data!.uid)
-              .get(),
+              .snapshots(),
           builder: (context, roleSnap) {
             if (!roleSnap.hasData) {
               return const Scaffold(
@@ -125,6 +127,19 @@ class AuthGate extends StatelessWidget {
 
             if (role == 'admin') {
               return const AdminDashboardPage();
+            }
+            if (role == 'traffic_police') {
+              final isVerified = data['isVerified'] == true &&
+                  data['verificationStatus'] == 'APPROVED';
+              if (!isVerified) {
+                return PendingVerificationScreen(
+                  status: data['verificationStatus'] as String? ?? 'PENDING',
+                );
+              }
+              return TrafficPoliceDashboardScreen(
+                uid: snapshot.data!.uid,
+                profile: data,
+              );
             }
             if (role == 'driver') {
               return _DriverGate(

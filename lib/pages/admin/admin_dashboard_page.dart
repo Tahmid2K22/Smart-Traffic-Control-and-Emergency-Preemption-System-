@@ -11,6 +11,7 @@ import 'drivers_management_page.dart';
 import 'users_management_page.dart';
 import 'hospitals_management_page.dart';
 import 'admin_activity_log_page.dart';
+import 'admin_verification_dashboard.dart';
 
 class AdminDashboardPage extends StatefulWidget {
   const AdminDashboardPage({super.key});
@@ -147,6 +148,20 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                 ),
               ),
               // logout
+              IconButton(
+                tooltip: 'Traffic police verification',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AdminVerificationDashboard(),
+                  ),
+                ),
+                icon: const Icon(
+                  Icons.verified_user_rounded,
+                  color: Colors.white,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 4),
               GestureDetector(
                 onTap: _showLogoutDialog,
                 child: Container(
