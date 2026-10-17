@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'request_service.dart';
 import 'supabase_service.dart';
@@ -23,6 +25,9 @@ class AuthService {
     String? vehicleType,
     String? vehicleNumber,
     String? licenseImagePath,
+    String? policeId,
+    String? assignedIntersection,
+    XFile? badgeImage,
   }) async {
     if (role == 'driver' &&
         (drivingLicense == null ||
@@ -30,6 +35,14 @@ class AuthService {
             vehicleNumber == null ||
             licenseImagePath == null)) {
       throw ArgumentError('All driver registration fields are required.');
+    }
+    if (role == 'traffic_police' &&
+        (policeId == null ||
+            policeId.trim().isEmpty ||
+            assignedIntersection == null ||
+            assignedIntersection.trim().isEmpty ||
+            badgeImage == null)) {
+      throw ArgumentError('All traffic police registration fields are required.');
     }
 
     final credential = await _auth.createUserWithEmailAndPassword(
@@ -47,7 +60,9 @@ class AuthService {
 
     // ── Write to Firebase Firestore ──────────────────────────
     final profile = <String, dynamic>{
+      'uid': user.uid,
       'name': name.trim(),
+      'fullName': name.trim(),
       'email': email.trim(),
       'phone': phone.trim(),
       'city': city,
@@ -62,6 +77,27 @@ class AuthService {
         'vehicleNumber': vehicleNumber!.trim(),
         'licenseImagePath': licenseImagePath,
         'isApproved': false,
+      });
+    }
+
+    if (role == 'traffic_police') {
+      final badgeRef = FirebaseStorage.instance
+          .ref()
+          .child('police_badges')
+          .child('${user.uid}.jpg');
+      await badgeRef.putData(
+        await badgeImage!.readAsBytes(),
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+      profile.addAll({
+        'uid': user.uid,
+        'fullName': name.trim(),
+        'policeId': policeId!.trim(),
+        'assignedIntersection': assignedIntersection!.trim(),
+        'badgeImageUrl': await badgeRef.getDownloadURL(),
+        'isVerified': false,
+        'verificationStatus': 'PENDING',
+        'isActive': false,
       });
     }
 

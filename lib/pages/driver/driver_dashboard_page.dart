@@ -8,6 +8,7 @@ import '../../constants/colors.dart';
 import '../../models/message_model.dart';
 import '../../models/request_model.dart';
 import '../../services/request_service.dart';
+import '../../services/traffic_service.dart';
 import '../chat_page.dart';
 import '../tracking_page.dart';
 
@@ -33,6 +34,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
 
   // location
   StreamSubscription<Position>? _locationSub;
+  final _trafficService = TrafficService();
 
   // countdown for auto-reject
   Timer? _countdownTimer;
@@ -162,6 +164,13 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
         lng: pos.longitude,
         currentRequestId: _driver.currentRequestId,
       );
+      final activeRequest = _activeRequest;
+      if (activeRequest != null) {
+        _trafficService.updateDispatchLocation(
+          dispatchId: activeRequest.id,
+          position: pos,
+        );
+      }
     });
   }
 
