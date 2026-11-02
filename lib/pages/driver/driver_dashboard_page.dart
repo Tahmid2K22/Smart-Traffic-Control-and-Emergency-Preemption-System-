@@ -1,14 +1,17 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../constants/colors.dart';
 import '../../models/message_model.dart';
 import '../../models/request_model.dart';
 import '../../services/request_service.dart';
 import '../../services/traffic_service.dart';
+import '../../services/map_search_service.dart';
 import '../chat_page.dart';
 import '../tracking_page.dart';
 
@@ -35,6 +38,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   // location
   StreamSubscription<Position>? _locationSub;
   final _trafficService = TrafficService();
+  final _mapSearchService = MapSearchService();
 
   // countdown for auto-reject
   Timer? _countdownTimer;
@@ -115,6 +119,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
         _lastSeenMessageCount = 0;
         _unreadCount = 0;
         if (req != null) {
+          _prepareTrafficSignals(req);
           _chatSub = RequestService.streamMessages(req.id).listen((msgs) {
             if (!mounted) return;
             setState(() => _unreadCount = msgs.length - _lastSeenMessageCount < 0
@@ -122,8 +127,24 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                 : msgs.length - _lastSeenMessageCount);
           });
         }
+
       }
     });
+  }
+
+  Future<void> _prepareTrafficSignals(AmbulanceRequest request) async {
+    try {
+      final route = await _mapSearchService.getDrivingRoute(
+        start: LatLng(request.pickupLat, request.pickupLng),
+        destination: LatLng(request.destinationLat, request.destinationLng),
+      );
+      await _trafficService.prepareRoute(
+        dispatchId: request.id,
+        routePoints: route.points,
+      );
+    } on Exception catch (error) {
+      debugPrint('Traffic signal preparation failed: $error');
+    }
   }
 
   void _startCountdown() {
@@ -168,6 +189,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       if (activeRequest != null) {
         _trafficService.updateDispatchLocation(
           dispatchId: activeRequest.id,
+          driverUid: FirebaseAuth.instance.currentUser?.uid ?? '',
           position: pos,
         );
       }
