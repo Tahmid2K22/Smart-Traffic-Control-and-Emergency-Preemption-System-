@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../constants/colors.dart';
 import '../constants/districts.dart';
+import 'hospital_register_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -339,6 +340,34 @@ class _ProfilePageState extends State<ProfilePage> {
                   borderRadius: BorderRadius.circular(14),
                 ),
                 elevation: 0,
+              ),
+            ),
+          ),
+          16.heightBox,
+          // ── Hospital Request ────────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const HospitalRegisterPage(),
+                ),
+              ),
+              icon: const Icon(Icons.local_hospital_rounded, size: 18),
+              label: Text(
+                'Request for registering a hospital',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                side: const BorderSide(color: AppColors.primary, width: 1.5),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
               ),
             ),
           ),

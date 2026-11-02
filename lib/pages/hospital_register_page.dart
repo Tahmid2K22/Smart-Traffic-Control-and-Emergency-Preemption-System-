@@ -154,6 +154,14 @@ class _HospitalRegisterPageState extends State<HospitalRegisterPage> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        title: Text(
+          'Request for registering a hospital',
+          style: GoogleFonts.poppins(
+            color: AppColors.textDark,
+            fontWeight: FontWeight.w600,
+            fontSize: 16,
+          ),
+        ),
         iconTheme: const IconThemeData(color: AppColors.textDark),
       ),
       body: SafeArea(
@@ -182,12 +190,13 @@ class _HospitalRegisterPageState extends State<HospitalRegisterPage> {
                       ),
                       const SizedBox(height: 20),
                       Text(
-                        'Register a Hospital',
+                        'Request for registering a hospital',
                         style: GoogleFonts.poppins(
-                          fontSize: 26,
+                          fontSize: 22,
                           fontWeight: FontWeight.bold,
                           color: AppColors.textDark,
                         ),
+                        textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 6),
                       Text(

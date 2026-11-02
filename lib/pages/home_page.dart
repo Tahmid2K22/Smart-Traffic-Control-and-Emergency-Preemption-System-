@@ -12,6 +12,7 @@ import 'ambulance_booking_screen.dart';
 import 'nearby_places_page.dart';
 import 'notifications_page.dart';
 import 'profile_page.dart';
+import 'hospital_register_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -140,6 +141,8 @@ class _HomePageState extends State<HomePage> {
           _buildServiceGrid(context),
           const SizedBox(height: 24),
           _buildNearbyHospitals(context),
+          const SizedBox(height: 16),
+          _buildHospitalRequestSection(context),
           const SizedBox(height: 20),
         ]),
       ),
@@ -242,7 +245,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _serviceCard(BuildContext context, ServiceItem service) {
-    final callback = service.label == 'Ambulance' ? () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const AmbulanceBookingScreen())) : service.label == 'Pharmacy' ? () => _openPlaces(NearbyPlaceType.pharmacies) : () => _openPlaces(NearbyPlaceType.hospitals);
+    final callback = service.label == 'Ambulance'
+        ? () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const AmbulanceBookingScreen()))
+        : service.label == 'Pharmacy'
+            ? () => _openPlaces(NearbyPlaceType.pharmacies)
+            : () => _openPlaces(NearbyPlaceType.hospitals);
     return InkWell(onTap: callback, borderRadius: BorderRadius.circular(18), child: Container(padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8), decoration: BoxDecoration(color: AppColors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: AppColors.cardBorder), boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: .04), blurRadius: 10, offset: const Offset(0, 4))]), child: Column(children: [Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: service.color.withValues(alpha: .1), borderRadius: BorderRadius.circular(16)), child: Icon(service.icon, color: service.color, size: 30)), const SizedBox(height: 12), Text(service.label, textAlign: TextAlign.center, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)), const SizedBox(height: 4), Text(service.subtitle, style: GoogleFonts.poppins(fontSize: 11, color: service.color))])));
   }
 
@@ -258,6 +265,84 @@ class _HomePageState extends State<HomePage> {
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(hospital.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textDark)), const SizedBox(height: 4), Text('${hospital.address} • ${hospital.distance}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: AppColors.textGrey)), const SizedBox(height: 8), Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: hospital.isOpen ? AppColors.successLight : AppColors.warningLight, borderRadius: BorderRadius.circular(10)), child: Text(hospital.isOpen ? 'Open' : 'Closed', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: hospital.isOpen ? AppColors.success : AppColors.warning))), const SizedBox(width: 8), Text('${hospital.beds} beds', style: const TextStyle(fontSize: 11, color: AppColors.textGrey))])])),
         IconButton(tooltip: 'Get directions', onPressed: () => _openPlaces(NearbyPlaceType.hospitals), icon: const Icon(Icons.directions_rounded, color: AppColors.primary)),
       ]),
+    );
+  }
+
+  Widget _buildHospitalRequestSection(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Container(
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: AppColors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.cardBorder),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: .04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: InkWell(
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => const HospitalRegisterPage(),
+            ),
+          ),
+          borderRadius: BorderRadius.circular(18),
+          child: Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryLight,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.domain_add_rounded,
+                    color: AppColors.primary,
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Request for registering a hospital',
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textDark,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Submit hospital details for admin approval',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: AppColors.textGrey,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 16,
+                  color: AppColors.primary,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
