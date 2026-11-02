@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -99,7 +98,11 @@ class BleTrafficService {
   // ── Connection ─────────────────────────────────────────────────────────────
   Future<void> connect(BluetoothDevice device) async {
     _device = device;
-    await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
+    await device.connect(
+      license: License.nonprofit,
+      autoConnect: false,
+      timeout: const Duration(seconds: 15),
+    );
     await _discoverServices();
     await _subscribeStatus();
     await _authenticate();
