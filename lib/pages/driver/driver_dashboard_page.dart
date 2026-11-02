@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -259,6 +260,84 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
                   color: _driver.isOnline ? AppColors.success : AppColors.textLight,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Logout',
+            onPressed: () => _showLogoutDialog(),
+            icon: const Icon(Icons.logout_rounded, color: AppColors.textGrey, size: 22),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLogoutDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        contentPadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: const BoxDecoration(
+                color: AppColors.primaryLight,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.logout_rounded, color: AppColors.primary, size: 32),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Logout',
+              style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Are you sure you want to log out?',
+              style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey, height: 1.5),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        actions: [
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textGrey,
+                    side: const BorderSide(color: AppColors.cardBorder),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: Text('Cancel', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    // Go offline first so we don't leave ghost-online state
+                    RequestService.setOnlineStatus(driverId: _driver.id, isOnline: false);
+                    FirebaseAuth.instance.signOut();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: AppColors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: Text('Logout', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
