@@ -21,6 +21,20 @@ class DeepLinkNavigationService {
     return _launch(Uri.https('www.google.com', '/maps/dir/', query));
   }
 
+  static Future<bool> startGoogleNavigation({
+    required double destinationLatitude,
+    required double destinationLongitude,
+  }) {
+    final uri = Uri(
+      scheme: 'google.navigation',
+      queryParameters: <String, String>{
+        'q': '$destinationLatitude,$destinationLongitude',
+        'mode': 'd',
+      },
+    );
+    return _launch(uri);
+  }
+
   static Future<bool> openWaze({
     required double destinationLatitude,
     required double destinationLongitude,

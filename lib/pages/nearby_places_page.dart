@@ -39,6 +39,7 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
   ];
 
   String get _title => widget.type == NearbyPlaceType.hospitals ? 'Nearby Hospitals' : 'Nearby Pharmacies';
+  double get _radiusKm => widget.type == NearbyPlaceType.hospitals ? 15 : 5;
 
   @override
   void initState() {
@@ -77,10 +78,19 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
       final results = await _placesApi.nearby(
         center: center,
         type: widget.type == NearbyPlaceType.hospitals ? 'hospital' : 'pharmacy',
+        radiusMeters: _radiusKm * 1000,
       );
       if (!mounted) return;
       setState(() {
-        _apiPlaces = results;
+        _apiPlaces = results.where((place) {
+          final distance = Geolocator.distanceBetween(
+            center.latitude,
+            center.longitude,
+            place.location.latitude,
+            place.location.longitude,
+          );
+          return distance <= _radiusKm * 1000;
+        }).toList();
         _loadingPlaces = false;
       });
     } on Exception {
@@ -90,7 +100,15 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
 
   List<_Place> get _places {
     if (_apiPlaces.isNotEmpty) {
-      return _apiPlaces.map((place) => _Place(
+      return _apiPlaces.where((place) {
+        final distance = Geolocator.distanceBetween(
+          _userLocation.latitude,
+          _userLocation.longitude,
+          place.location.latitude,
+          place.location.longitude,
+        );
+        return distance <= _radiusKm * 1000;
+      }).map((place) => _Place(
             place.name,
             place.address,
             Geolocator.distanceBetween(_userLocation.latitude, _userLocation.longitude, place.location.latitude, place.location.longitude) / 1000,
@@ -123,7 +141,7 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(title: Text(_title), backgroundColor: Colors.transparent, elevation: 0, actions: [IconButton(tooltip: _showMap ? 'Show list' : 'Show map', onPressed: () => setState(() => _showMap = !_showMap), icon: Icon(_showMap ? Icons.view_list_rounded : Icons.map_rounded))]),
+      appBar: AppBar(title: Text('$_title within ${_radiusKm.toStringAsFixed(0)} km'), backgroundColor: Colors.transparent, elevation: 0, actions: [IconButton(tooltip: _showMap ? 'Show list' : 'Show map', onPressed: () => setState(() => _showMap = !_showMap), icon: Icon(_showMap ? Icons.view_list_rounded : Icons.map_rounded))]),
       body: _showMap ? GoogleMap(initialCameraPosition: CameraPosition(target: _userLocation, zoom: 13.8), onMapCreated: (controller) => _mapController = controller, markers: _markers(), myLocationEnabled: _locationReady, myLocationButtonEnabled: _locationReady, zoomControlsEnabled: false) : ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 24), children: [_Header(type: widget.type), if (_loadingPlaces) const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator(color: AppColors.primary, minHeight: 2)), const SizedBox(height: 16), ..._places.map((place) => Padding(padding: const EdgeInsets.only(bottom: 12), child: _PlaceCard(place: place, onDirections: () => _openDirections(place))))]),
     );
   }

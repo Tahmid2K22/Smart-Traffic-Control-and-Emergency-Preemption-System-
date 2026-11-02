@@ -64,10 +64,60 @@ class AdminService {
       .where('isApproved', isEqualTo: false)
       .snapshots();
 
+  Stream<QuerySnapshot> pendingTrafficPoliceStream() => _firestore
+      .collection('users')
+      .where('role', isEqualTo: 'traffic_police')
+      .where('verificationStatus', isEqualTo: 'PENDING')
+      .snapshots();
+
+  Future<void> verifyTrafficPolice(String uid, {String name = ''}) async {
+    await _firestore.collection('users').doc(uid).update({
+      'isVerified': true,
+      'verificationStatus': 'APPROVED',
+      'isActive': false,
+    });
+    await _writeLog(
+      action: 'approve_traffic_police',
+      targetType: 'traffic_police',
+      targetId: uid,
+      targetName: name,
+    );
+  }
+
+  Future<void> rejectTrafficPolice(String uid, {String name = ''}) async {
+    await _firestore.collection('users').doc(uid).update({
+      'isVerified': false,
+      'verificationStatus': 'REJECTED',
+      'isActive': false,
+    });
+    await _writeLog(
+      action: 'reject_traffic_police',
+      targetType: 'traffic_police',
+      targetId: uid,
+      targetName: name,
+    );
+  }
+
+  Future<void> setOfficerActive(String uid, bool isActive) =>
+      _firestore.collection('users').doc(uid).update({'isActive': isActive});
+
+  Future<void> overrideSignal(String alertId, String dispatchId) =>
+      _firestore.collection('emergency_alerts').doc(alertId).set({
+        'signalState': 'EMERGENCY_OVERRIDE',
+        'dispatchId': dispatchId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+  Future<void> clearEmergencyAlert(String alertId) =>
+      _firestore.collection('emergency_alerts').doc(alertId).update({
+        'status': 'CLEARED',
+        'clearedAt': FieldValue.serverTimestamp(),
+      });
+
   // regular users and admins
   Stream<QuerySnapshot> allUsersStream() => _firestore
       .collection('users')
-      .where('role', whereIn: ['user', 'admin']).snapshots();
+      .where('role', whereIn: ['patient', 'user', 'admin']).snapshots();
 
   // approve driver
   Future<void> verifyDriver(String uid, {String name = ''}) async {
@@ -176,7 +226,13 @@ class AdminService {
     final results = await Future.wait([
       _firestore
           .collection('users')
-          .where('role', isEqualTo: 'user')
+          .where('role', isEqualTo: 'traffic_police')
+          .where('verificationStatus', isEqualTo: 'PENDING')
+          .count()
+          .get(),
+      _firestore
+          .collection('users')
+          .where('role', whereIn: ['user', 'patient'])
           .count()
           .get(),
       _firestore
@@ -204,12 +260,13 @@ class AdminService {
     ]);
 
     return {
-      'totalUsers': results[0].count ?? 0,
-      'totalDrivers': results[1].count ?? 0,
-      'pendingDrivers': results[2].count ?? 0,
-      'totalAdmins': results[3].count ?? 0,
-      'totalHospitals': results[4].count ?? 0,
-      'pendingHospitals': results[5].count ?? 0,
+      'pendingTrafficPolice': results[0].count ?? 0,
+      'totalUsers': results[1].count ?? 0,
+      'totalDrivers': results[2].count ?? 0,
+      'pendingDrivers': results[3].count ?? 0,
+      'totalAdmins': results[4].count ?? 0,
+      'totalHospitals': results[5].count ?? 0,
+      'pendingHospitals': results[6].count ?? 0,
     };
   }
 }

@@ -23,10 +23,12 @@ class _RegisterPageState extends State<RegisterPage> {
   final _confirmPasswordController = TextEditingController();
   final _licenseController = TextEditingController();
   final _vehicleNumberController = TextEditingController();
+  final _policeIdController = TextEditingController();
+  final _intersectionController = TextEditingController();
   final _imagePicker = ImagePicker();
   final _authService = AuthService();
 
-  String _role = 'user';
+  String _role = 'patient';
   String? _selectedCity;
   String? _selectedVehicleType;
   XFile? _licenseImage;
@@ -34,11 +36,16 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _isLoading = false;
 
   bool get _isDriver => _role == 'driver';
+  bool get _isTrafficPolice => _role == 'traffic_police';
 
   Future<void> _register() async {
     FocusScope.of(context).unfocus();
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_isDriver && _licenseImage == null) {
+      setState(() => _licenseImageError = true);
+      return;
+    }
+    if (_isTrafficPolice && _licenseImage == null) {
       setState(() => _licenseImageError = true);
       return;
     }
@@ -50,19 +57,22 @@ class _RegisterPageState extends State<RegisterPage> {
         email: _emailController.text,
         phone: _phoneController.text,
         password: _passwordController.text,
-        city: _selectedCity!,
+        city: _selectedCity ?? '',
         role: _role,
         drivingLicense: _licenseController.text,
         vehicleType: _selectedVehicleType,
         vehicleNumber: _vehicleNumberController.text,
         licenseImagePath: _licenseImage?.path,
+        policeId: _policeIdController.text,
+        assignedIntersection: _intersectionController.text,
+        badgeImage: _isTrafficPolice ? _licenseImage : null,
       );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            _isDriver
+            (_isDriver || _isTrafficPolice)
                 ? 'Registration submitted for admin approval.'
                 : 'Account created successfully.',
           ),
@@ -139,6 +149,8 @@ class _RegisterPageState extends State<RegisterPage> {
     _confirmPasswordController.dispose();
     _licenseController.dispose();
     _vehicleNumberController.dispose();
+    _policeIdController.dispose();
+    _intersectionController.dispose();
     super.dispose();
   }
 
@@ -249,6 +261,32 @@ class _RegisterPageState extends State<RegisterPage> {
                   const SizedBox(height: 16),
                   _buildLicenseImagePicker(),
                 ],
+                if (_isTrafficPolice) ...[
+                  const SizedBox(height: 16),
+                  _buildTextField(
+                    controller: _policeIdController,
+                    label: 'Official Police ID',
+                    icon: Icons.badge_rounded,
+                    validator: (value) => _required(
+                      value,
+                      'Please enter your official police ID.',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildTextField(
+                    controller: _intersectionController,
+                    label: 'Assigned Intersection',
+                    icon: Icons.traffic_rounded,
+                    validator: (value) => _required(
+                      value,
+                      'Please enter your assigned intersection.',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildLicenseImagePicker(
+                    label: 'Upload Police ID Badge',
+                  ),
+                ],
                 const SizedBox(height: 32),
                 SizedBox(
                   width: double.infinity,
@@ -283,8 +321,9 @@ class _RegisterPageState extends State<RegisterPage> {
   Widget _buildRoleSwitcher() {
     return SegmentedButton<String>(
       segments: const [
-        ButtonSegment(value: 'user', label: Text('User'), icon: Icon(Icons.person_rounded)),
+        ButtonSegment(value: 'patient', label: Text('Patient'), icon: Icon(Icons.person_rounded)),
         ButtonSegment(value: 'driver', label: Text('Rider / Driver'), icon: Icon(Icons.drive_eta_rounded)),
+        ButtonSegment(value: 'traffic_police', label: Text('Traffic Police'), icon: Icon(Icons.traffic_rounded)),
       ],
       selected: {_role},
       onSelectionChanged: (selection) {
@@ -352,7 +391,7 @@ class _RegisterPageState extends State<RegisterPage> {
     );
   }
 
-  Widget _buildLicenseImagePicker() {
+  Widget _buildLicenseImagePicker({String label = 'Upload Driving License / NID Photo'}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -376,7 +415,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     children: [
                       Icon(Icons.add_a_photo_rounded, size: 34, color: AppColors.primary),
                       const SizedBox(height: 8),
-                      Text('Upload Driving License / NID Photo', style: GoogleFonts.poppins(color: AppColors.textGrey)),
+                      Text(label, style: GoogleFonts.poppins(color: AppColors.textGrey)),
                     ],
                   )
                 : FutureBuilder(

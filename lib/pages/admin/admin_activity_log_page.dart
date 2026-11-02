@@ -85,6 +85,16 @@ class _LogTile extends StatelessWidget {
       icon: Icons.cancel_rounded,
       color: Color(0xFFB71C1C),
     ),
+    'approve_traffic_police': (
+      label: 'Approved Traffic Officer',
+      icon: Icons.verified_user_rounded,
+      color: AppColors.success,
+    ),
+    'reject_traffic_police': (
+      label: 'Rejected Traffic Officer',
+      icon: Icons.gpp_bad_rounded,
+      color: Color(0xFFB71C1C),
+    ),
     'approve_hospital': (
       label: 'Approved Hospital',
       icon: Icons.local_hospital_rounded,
@@ -227,6 +237,7 @@ class _LogTile extends StatelessWidget {
     final icon = switch (type) {
       'hospital' => Icons.local_hospital_outlined,
       'driver' => Icons.drive_eta_rounded,
+      'traffic_police' => Icons.traffic_rounded,
       _ => Icons.person_outlined,
     };
     return Icon(icon, size: 13, color: AppColors.textLight);
