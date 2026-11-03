@@ -292,6 +292,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   color: AppColors.primary,
                 ),
               ),
+
             ],
             selectedIndex: _selectedTab,
             onTabChange: (index) => setState(() => _selectedTab = index),

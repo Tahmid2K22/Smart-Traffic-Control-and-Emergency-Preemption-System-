@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -72,7 +72,7 @@ class BleTrafficService {
   bool get isConnected      => _device?.isConnected ?? false;
   bool get isAuthenticated  => _authenticated;
 
-  // ── Scanning ───────────────────────────────────────────────────────────────
+  //  Scanning 
   /// Scans for ESP32 traffic-light devices (advertise service UUID).
   Stream<List<TrafficLightDevice>> scan({Duration timeout = const Duration(seconds: 10)}) async* {
     final found = <String, TrafficLightDevice>{};
@@ -142,9 +142,65 @@ class BleTrafficService {
     });
   }
 
+  /// Verifies if the current logged-in user is authorized to control traffic lights.
+  /// Only verified `traffic_police` officers and `admin` users are authorized.
+  Future<Map<String, dynamic>> checkUserAuthorization() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return {
+        'isAuthorized': false,
+        'role': 'unauthenticated',
+        'isVerified': false,
+        'reason': 'Please log in to control traffic lights.',
+      };
+    }
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final data = doc.data() ?? {};
+      final role = data['role'] as String? ?? 'user';
+      final isVerified = (data['isVerified'] == true && data['verificationStatus'] == 'APPROVED') || role == 'admin';
+
+      if (role != 'traffic_police' && role != 'admin') {
+        return {
+          'isAuthorized': false,
+          'role': role,
+          'isVerified': false,
+          'reason': 'Access Restricted: Only Traffic Police or Admin can modify traffic lights.',
+        };
+      }
+
+      if (role == 'traffic_police' && !isVerified) {
+        return {
+          'isAuthorized': false,
+          'role': role,
+          'isVerified': false,
+          'verificationStatus': data['verificationStatus'] ?? 'PENDING',
+          'reason': 'Verification Required: Your Traffic Police account is pending Admin approval.',
+        };
+      }
+
+      return {
+        'isAuthorized': true,
+        'role': role,
+        'isVerified': true,
+        'name': data['name'] ?? data['fullName'] ?? 'Traffic Officer',
+        'policeId': data['policeId'] ?? '',
+        'intersection': data['assignedIntersection'] ?? '',
+      };
+    } catch (e) {
+      return {
+        'isAuthorized': false,
+        'role': 'unknown',
+        'isVerified': false,
+        'reason': 'Error checking authorization: $e',
+      };
+    }
+  }
+
   // ── Authentication (HMAC challenge-response) ───────────────────────────────
   /// 3-step handshake:
-  /// 1. App writes its Firebase UID + role to authChar
+  /// 1. App writes its Firebase UID + verified role to authChar
   /// 2. ESP32 notifies a random 16-byte challenge
   /// 3. App writes HMAC-SHA256(challenge, sharedSecret) back
   Future<void> _authenticate() async {
@@ -152,8 +208,16 @@ class BleTrafficService {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) throw Exception('Not logged in');
 
-    // Step 1 — send identity
-    final identity = jsonEncode({'uid': user.uid, 'role': 'driver'});
+    // Strict role check: only verified traffic_police or admin allowed
+    final authStatus = await checkUserAuthorization();
+    if (authStatus['isAuthorized'] != true) {
+      throw Exception(authStatus['reason'] ?? 'Access denied: Traffic Police authorization required.');
+    }
+
+    final role = authStatus['role'] as String;
+
+    // Step 1 — send identity with verified role
+    final identity = jsonEncode({'uid': user.uid, 'role': role});
     await _authChar!.write(utf8.encode(identity), withoutResponse: false);
 
     // Step 2 — read challenge (ESP32 replies via notify; we poll once for simplicity)
@@ -179,7 +243,7 @@ class BleTrafficService {
       } catch (_) {}
     }
 
-    if (!_authenticated) throw Exception('Authentication rejected by ESP32');
+    if (!_authenticated) throw Exception('Authentication rejected by ESP32 (Role or signature invalid)');
   }
 
   // ── Command sending ────────────────────────────────────────────────────────
@@ -189,6 +253,12 @@ class BleTrafficService {
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null)     throw Exception('Not logged in');
+
+    // Re-verify authorization before sending command
+    final authStatus = await checkUserAuthorization();
+    if (authStatus['isAuthorized'] != true) {
+      throw Exception('Unauthorized: Only Traffic Police or Admin can send traffic light commands.');
+    }
 
     // Build signed command
     final ts    = DateTime.now().millisecondsSinceEpoch;

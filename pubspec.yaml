@@ -54,6 +54,8 @@ dependencies:
   http: ^1.4.0
   supabase_flutter: ^2.9.0
   flutter_dotenv: ^5.2.1
+  flutter_blue_plus: ^1.35.3   # BLE scanning & GATT
+  crypto: ^3.0.6               # HMAC-SHA256 command signing
   flutter_map: ^8.2.2
   latlong2: ^0.9.1
 

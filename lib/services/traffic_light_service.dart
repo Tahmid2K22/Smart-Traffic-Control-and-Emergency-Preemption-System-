@@ -30,6 +30,22 @@ class TrafficLightService {
   static Stream<DocumentSnapshot> watchLight(String id) =>
       _col.doc(id).snapshots();
 
+  // ── Authorization ─────────────────────────────────────────────────────────
+
+  /// Verifies if a user has permission to modify traffic light states.
+  /// Only verified Traffic Police officers and Administrators are permitted.
+  static Future<bool> isAuthorized(String uid) async {
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final data = doc.data() ?? {};
+      final role = data['role'] as String? ?? 'user';
+      final isVerified = (data['isVerified'] == true && data['verificationStatus'] == 'APPROVED') || role == 'admin';
+      return (role == 'traffic_police' && isVerified) || role == 'admin';
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ── Write ─────────────────────────────────────────────────────────────────
 
   /// Switch to manual mode and set the light colour.
@@ -38,13 +54,19 @@ class TrafficLightService {
     String id,
     String status,
     String uid,
-  ) =>
-      _col.doc(id).update({
-        'status': status,
-        'mode': 'manual',
-        'lastUpdatedBy': uid,
-        'lastUpdatedAt': FieldValue.serverTimestamp(),
-      });
+  ) async {
+    final allowed = await isAuthorized(uid);
+    if (!allowed) {
+      throw Exception('Permission denied: Only verified Traffic Police or Admin can update traffic lights.');
+    }
+
+    await _col.doc(id).update({
+      'status': status,
+      'mode': 'manual',
+      'lastUpdatedBy': uid,
+      'lastUpdatedAt': FieldValue.serverTimestamp(),
+    });
+  }
 
   /// Switch to auto mode and update the phase durations.
   static Future<void> setAutoMode(
@@ -53,16 +75,22 @@ class TrafficLightService {
     int redSec,
     int yellowSec,
     String uid,
-  ) =>
-      _col.doc(id).update({
-        'mode': 'auto',
-        'status': 'auto',
-        'autoGreenSeconds': greenSec,
-        'autoRedSeconds': redSec,
-        'autoYellowSeconds': yellowSec,
-        'lastUpdatedBy': uid,
-        'lastUpdatedAt': FieldValue.serverTimestamp(),
-      });
+  ) async {
+    final allowed = await isAuthorized(uid);
+    if (!allowed) {
+      throw Exception('Permission denied: Only verified Traffic Police or Admin can update traffic lights.');
+    }
+
+    await _col.doc(id).update({
+      'mode': 'auto',
+      'status': 'auto',
+      'autoGreenSeconds': greenSec,
+      'autoRedSeconds': redSec,
+      'autoYellowSeconds': yellowSec,
+      'lastUpdatedBy': uid,
+      'lastUpdatedAt': FieldValue.serverTimestamp(),
+    });
+  }
 
   // ── Admin-only ────────────────────────────────────────────────────────────
 

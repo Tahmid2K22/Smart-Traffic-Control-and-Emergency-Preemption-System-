@@ -5,6 +5,8 @@ import 'package:latlong2/latlong.dart';
 
 import '../../services/admin_service.dart';
 import '../../services/traffic_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../traffic_light_control_page.dart';
 
 class TrafficPoliceDashboardScreen extends StatefulWidget {
   const TrafficPoliceDashboardScreen({
@@ -50,6 +52,21 @@ class _TrafficPoliceDashboardScreenState
       appBar: AppBar(
         title: Text(widget.profile['assignedIntersection']?.toString() ?? 'Traffic Control'),
         actions: [
+          IconButton(
+            tooltip: 'ESP32 Traffic Light Control',
+            icon: const Icon(Icons.traffic_rounded, color: Colors.amber),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TrafficLightControlPage()),
+              );
+            },
+          ),
+          IconButton(
+            tooltip: 'Log Out',
+            icon: const Icon(Icons.logout_rounded),
+            onPressed: () => FirebaseAuth.instance.signOut(),
+          ),
           Switch(
             value: _isActive,
             onChanged: (value) async {
@@ -139,6 +156,18 @@ class _TrafficPoliceDashboardScreenState
                       ),
               ),
             ],
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: Colors.redAccent,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.traffic_rounded),
+        label: const Text('ESP32 Signal Control'),
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const TrafficLightControlPage()),
           );
         },
       ),
