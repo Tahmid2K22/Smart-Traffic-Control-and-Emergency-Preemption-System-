@@ -8,6 +8,8 @@ import '../constants/colors.dart';
 import '../models/message_model.dart';
 import '../models/request_model.dart';
 import '../services/request_service.dart';
+import '../services/deep_link_navigation_service.dart';
+import '../services/map_search_service.dart';
 import 'chat_page.dart';
 
 /// Shared live-tracking screen shown to both user and driver after a request
@@ -33,6 +35,8 @@ class _TrackingPageState extends State<TrackingPage> {
   AmbulanceRequest? _request;
   StreamSubscription<AmbulanceRequest?>? _sub;
   GoogleMapController? _mapController;
+  final _mapSearchService = MapSearchService();
+  Set<Polyline> _routePolylines = const {};
 
   static const _defaultCenter = LatLng(23.8103, 90.4125);
 
@@ -41,7 +45,9 @@ class _TrackingPageState extends State<TrackingPage> {
     super.initState();
     _sub = RequestService.streamRequest(widget.requestId).listen((req) {
       if (!mounted) return;
+      final routeChanged = req != null && req.id != _request?.id;
       setState(() => _request = req);
+      if (routeChanged) _loadRoute(req);
       _animateToRelevantPin();
 
       // Auto-pop when trip is done
@@ -50,12 +56,36 @@ class _TrackingPageState extends State<TrackingPage> {
           if (mounted) Navigator.of(context).pop();
         });
       }
+
     });
+  }
+
+  Future<void> _loadRoute(AmbulanceRequest request) async {
+    try {
+      final route = await _mapSearchService.getDrivingRoute(
+        start: LatLng(request.pickupLat, request.pickupLng),
+        destination: LatLng(request.destinationLat, request.destinationLng),
+      );
+      if (!mounted || _request?.id != request.id) return;
+      setState(() {
+        _routePolylines = {
+          Polyline(
+            polylineId: const PolylineId('active-route'),
+            points: route.points,
+            color: AppColors.primary,
+            width: 6,
+          ),
+        };
+      });
+    } on Exception catch (error) {
+      debugPrint('Active route loading failed: $error');
+    }
   }
 
   @override
   void dispose() {
     _sub?.cancel();
+    _mapSearchService.dispose();
     super.dispose();
   }
 
@@ -156,6 +186,7 @@ class _TrackingPageState extends State<TrackingPage> {
             ),
             onMapCreated: (c) { _mapController = c; _animateToRelevantPin(); },
             markers: _markers(),
+            polylines: _routePolylines,
             zoomControlsEnabled: false,
             myLocationButtonEnabled: false,
           ),
@@ -229,6 +260,30 @@ class _StatusInfo extends StatelessWidget {
         _TripRow(icon: Icons.flag_rounded, label: 'Destination', value: req.destinationAddress),
         const SizedBox(height: 8),
         _TripRow(icon: Icons.payments_rounded, label: 'Fare', value: '৳${req.estimatedFare}'),
+        if (isDriver) ...[
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () async {
+                final opened =
+                    await DeepLinkNavigationService.startGoogleNavigation(
+                  destinationLatitude: req.destinationLat,
+                  destinationLongitude: req.destinationLng,
+                );
+                if (!opened && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Google Maps is not available on this device.'),
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.navigation_rounded),
+              label: const Text('Start Google Maps navigation'),
+            ),
+          ),
+        ],
       ],
     );
   }

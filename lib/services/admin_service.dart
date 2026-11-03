@@ -103,6 +103,7 @@ class AdminService {
 
   Future<void> overrideSignal(String alertId, String dispatchId) =>
       _firestore.collection('emergency_alerts').doc(alertId).set({
+        'status': 'SIGNAL_OVERRIDDEN',
         'signalState': 'EMERGENCY_OVERRIDE',
         'dispatchId': dispatchId,
         'updatedAt': FieldValue.serverTimestamp(),

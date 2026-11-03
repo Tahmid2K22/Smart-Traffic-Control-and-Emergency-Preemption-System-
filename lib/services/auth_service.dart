@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 
 import 'request_service.dart';
 import 'supabase_service.dart';
+import 'map_search_service.dart';
 
 class AuthService {
   AuthService({FirebaseAuth? auth, FirebaseFirestore? firestore})
@@ -99,6 +100,14 @@ class AuthService {
         'verificationStatus': 'PENDING',
         'isActive': false,
       });
+      final locations = await MapSearchService().search(assignedIntersection);
+      if (locations.isNotEmpty) {
+        final point = locations.first.location;
+        profile['intersectionLocation'] = GeoPoint(
+          point.latitude,
+          point.longitude,
+        );
+      }
     }
 
     await _firestore.collection('users').doc(user.uid).set(profile);
