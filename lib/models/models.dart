@@ -107,6 +107,9 @@ class HospitalModel {
   final String id;
   final String name;
   final String city;
+  final String address;
+  final String email;
+  final String phone;
   final double lat;
   final double lon;
   final int beds;
@@ -120,6 +123,9 @@ class HospitalModel {
     required this.id,
     required this.name,
     required this.city,
+    this.address = '',
+    this.email = '',
+    this.phone = '',
     required this.lat,
     required this.lon,
     required this.beds,
@@ -136,6 +142,9 @@ class HospitalModel {
       id: doc.id,
       name: data['name'] as String? ?? '',
       city: data['city'] as String? ?? '',
+      address: data['address'] as String? ?? '',
+      email: data['email'] as String? ?? '',
+      phone: data['phone'] as String? ?? '',
       lat: (data['lat'] as num?)?.toDouble() ?? 0.0,
       lon: (data['lon'] as num?)?.toDouble() ?? 0.0,
       beds: (data['beds'] as num?)?.toInt() ?? 0,

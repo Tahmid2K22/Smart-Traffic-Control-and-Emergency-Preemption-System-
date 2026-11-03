@@ -14,6 +14,7 @@ import 'pages/profile_page.dart';
 import 'pages/login_page.dart';
 import 'pages/driver/driver_dashboard_page.dart';
 import 'pages/admin/admin_dashboard_page.dart';
+import 'pages/hospital/hospital_dashboard_page.dart';
 import 'pages/traffic/pending_verification_screen.dart';
 import 'pages/traffic/traffic_police_dashboard.dart';
 import 'models/request_model.dart';
@@ -147,10 +148,59 @@ class AuthGate extends StatelessWidget {
                 firestoreData: data,
               );
             }
+            if (role == 'hospital') {
+              if (data['isApproved'] != true) {
+                return _HospitalPendingScreen(
+                  hospitalName: data['name'] as String? ?? 'Hospital',
+                );
+              }
+              return HospitalDashboardPage(profile: data);
+            }
             return const DashboardPage();
           },
         );
       },
+    );
+  }
+}
+
+class _HospitalPendingScreen extends StatelessWidget {
+  const _HospitalPendingScreen({required this.hospitalName});
+
+  final String hospitalName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.hourglass_top_rounded,
+                  size: 64, color: AppColors.warning),
+              const SizedBox(height: 20),
+              Text('$hospitalName is awaiting approval',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 10),
+              const Text(
+                'An administrator will review your registration. After approval, sign in again to manage services, specialties, beds, and map location.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              OutlinedButton.icon(
+                onPressed: () => FirebaseAuth.instance.signOut(),
+                icon: const Icon(Icons.logout_rounded),
+                label: const Text('Sign out'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

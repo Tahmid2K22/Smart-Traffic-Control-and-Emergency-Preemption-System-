@@ -33,6 +33,23 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Dependency and command/build output from Firebase Functions
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/pnpm-debug.log*
+functions/.firebase/
+functions/.runtimeconfig.json
+functions/lib/.cache/
+
+# Local tooling and generated build output
+**/.gradle/
+**/cmake-build-*/
+**/dist/
+**/out/
+**/tmp/
+
 # Symbolication related
 app.*.symbols
 
