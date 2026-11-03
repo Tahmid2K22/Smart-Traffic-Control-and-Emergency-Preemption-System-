@@ -1,46 +1,37 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:crypto/crypto.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
-// ── BLE UUIDs (must match ESP32 firmware exactly) ────────────────────────────
-// Service UUID for Traffic Light Controller
-const String kTrafficServiceUUID  = '12345678-1234-1234-1234-123456789abc';
-// Characteristic: app writes commands here
-const String kCommandCharUUID     = '12345678-1234-1234-1234-123456789001';
-// Characteristic: ESP32 notifies status updates here
-const String kStatusCharUUID      = '12345678-1234-1234-1234-123456789002';
-// Characteristic: auth challenge/response
-const String kAuthCharUUID        = '12345678-1234-1234-1234-123456789003';
+// ── BLE UUIDs & Passcode ──────────────────────────────────────────────────────
+const String kTrafficServiceUUID = '12345678-1234-1234-1234-123456789abc';
+const String kCommandCharUUID    = '12345678-1234-1234-1234-123456789001';
+const String kStatusCharUUID     = '12345678-1234-1234-1234-123456789002';
+const String kPolicePasscode     = 'TRAFFIC_POLICE_SECURE_PASS_2024';
 
-// ── Command protocol ─────────────────────────────────────────────────────────
-// JSON-based signed command format:
-// { "cmd": "RED|YELLOW|GREEN|AUTO", "uid": "<firebaseUID>",
-//   "ts": <unixMs>, "sig": "<hmac-sha256-hex>", [...extra fields] }
-//
-// The ESP32 validates:
-//  1. HMAC-SHA256 of (cmd+uid+ts) using the shared secret
-//  2. Timestamp within ±30 seconds (replay-attack protection)
-//  3. Role byte in auth handshake (only admin/driver allowed)
-
-const String kSharedSecret = 'CHANGE_ME_USE_ENV_SECRET_32BYTES!';
-
-/// Result of a BLE scan
+// ── Models ───────────────────────────────────────────────────────────────────
 class TrafficLightDevice {
   final BluetoothDevice device;
   final String name;
   final int rssi;
-  TrafficLightDevice({required this.device, required this.name, required this.rssi});
+  TrafficLightDevice({
+    required this.device,
+    required this.name,
+    required this.rssi,
+  });
 }
 
-/// Live status received from ESP32
 class TrafficLightStatus {
   final String currentLight; // 'red' | 'yellow' | 'green'
   final String mode;         // 'manual' | 'auto'
-  final int    uptime;       // seconds since boot
-  final bool   authOk;       // whether session is authenticated
+  final int    uptime;       // seconds
+  final bool   authOk;
+
   TrafficLightStatus({
     required this.currentLight,
     required this.mode,
@@ -48,115 +39,58 @@ class TrafficLightStatus {
     required this.authOk,
   });
 
-  factory TrafficLightStatus.fromJson(Map<String, dynamic> j) => TrafficLightStatus(
-    currentLight: j['light'] as String? ?? 'red',
-    mode:         j['mode']  as String? ?? 'manual',
-    uptime:       (j['uptime'] as num?)?.toInt() ?? 0,
-    authOk:       j['auth']  as bool?   ?? false,
-  );
+  factory TrafficLightStatus.fromJson(Map<String, dynamic> j) =>
+      TrafficLightStatus(
+        currentLight: j['light']  as String? ?? 'red',
+        mode:         j['mode']   as String? ?? 'manual',
+        uptime:       (j['uptime'] as num?)?.toInt() ?? 0,
+        authOk:       j['auth']   as bool?   ?? true,
+      );
 }
 
+// ── BleTrafficService ─────────────────────────────────────────────────────────
 class BleTrafficService {
   BleTrafficService._();
   static final BleTrafficService instance = BleTrafficService._();
 
-  BluetoothDevice?          _device;
-  BluetoothCharacteristic?  _cmdChar;
-  BluetoothCharacteristic?  _statusChar;
-  BluetoothCharacteristic?  _authChar;
+  BluetoothDevice?         _device;
+  BluetoothCharacteristic? _cmdChar;
+  BluetoothCharacteristic? _statusChar;
 
-  bool _authenticated = false;
   final _statusController = StreamController<TrafficLightStatus>.broadcast();
+  StreamSubscription<List<ScanResult>>? _autoScanSub;
+  StreamSubscription<BluetoothConnectionState>? _connSub;
+
+  bool _autoConnectEnabled = false;
+  bool _autoConnecting     = false;
 
   Stream<TrafficLightStatus> get statusStream => _statusController.stream;
-  bool get isConnected      => _device?.isConnected ?? false;
-  bool get isAuthenticated  => _authenticated;
+  bool get isConnected        => _device?.isConnected ?? false;
+  bool get isAuthenticated    => isConnected;
+  bool get autoConnectEnabled => _autoConnectEnabled;
 
-  //  Scanning 
-  /// Scans for ESP32 traffic-light devices (advertise service UUID).
-  Stream<List<TrafficLightDevice>> scan({Duration timeout = const Duration(seconds: 10)}) async* {
-    final found = <String, TrafficLightDevice>{};
-    await FlutterBluePlus.startScan(
-      withServices: [Guid(kTrafficServiceUUID)],
-      timeout: timeout,
-    );
-    await for (final results in FlutterBluePlus.scanResults) {
-      for (final r in results) {
-        found[r.device.remoteId.str] = TrafficLightDevice(
-          device: r.device,
-          name: r.device.platformName.isNotEmpty
-              ? r.device.platformName
-              : 'ESP32 Traffic Light',
-          rssi: r.rssi,
-        );
-      }
-      yield found.values.toList();
+  // ── Permissions ────────────────────────────────────────────────────────────
+  Future<bool> requestPermissions() async {
+    if (kIsWeb) return false;
+    if (Platform.isAndroid) {
+      final res = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.locationWhenInUse,
+      ].request();
+      return res.values.every((s) => s.isGranted || s.isLimited);
     }
-  }
-
-  Future<void> stopScan() => FlutterBluePlus.stopScan();
-
-  // ── Connection ─────────────────────────────────────────────────────────────
-  Future<void> connect(BluetoothDevice device) async {
-    _device = device;
-    await device.connect(
-      license: License.nonprofit,
-      autoConnect: false,
-      timeout: const Duration(seconds: 15),
-    );
-    await _discoverServices();
-    await _subscribeStatus();
-    await _authenticate();
-  }
-
-  Future<void> disconnect() async {
-    _authenticated = false;
-    await _device?.disconnect();
-    _device    = null;
-    _cmdChar   = null;
-    _statusChar = null;
-    _authChar  = null;
-  }
-
-  Future<void> _discoverServices() async {
-    final services = await _device!.discoverServices();
-    for (final s in services) {
-      if (s.uuid == Guid(kTrafficServiceUUID)) {
-        for (final c in s.characteristics) {
-          if (c.uuid == Guid(kCommandCharUUID))  _cmdChar    = c;
-          if (c.uuid == Guid(kStatusCharUUID))   _statusChar = c;
-          if (c.uuid == Guid(kAuthCharUUID))      _authChar   = c;
-        }
-        break;
-      }
+    if (Platform.isIOS) {
+      return (await Permission.bluetooth.request()).isGranted;
     }
-    if (_cmdChar == null || _statusChar == null || _authChar == null) {
-      throw Exception('Required BLE characteristics not found. Wrong device?');
-    }
+    return true;
   }
 
-  Future<void> _subscribeStatus() async {
-    await _statusChar!.setNotifyValue(true);
-    _statusChar!.lastValueStream.listen((bytes) {
-      if (bytes.isEmpty) return;
-      try {
-        final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-        _statusController.add(TrafficLightStatus.fromJson(json));
-      } catch (_) {}
-    });
-  }
-
-  /// Verifies if the current logged-in user is authorized to control traffic lights.
-  /// Only verified `traffic_police` officers and `admin` users are authorized.
+  // ── Role Authorization Gate ────────────────────────────────────────────────
   Future<Map<String, dynamic>> checkUserAuthorization() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      return {
-        'isAuthorized': false,
-        'role': 'unauthenticated',
-        'isVerified': false,
-        'reason': 'Please log in to control traffic lights.',
-      };
+      return {'isAuthorized': false, 'role': 'none', 'reason': 'Please log in.'};
     }
 
     try {
@@ -169,8 +103,7 @@ class BleTrafficService {
         return {
           'isAuthorized': false,
           'role': role,
-          'isVerified': false,
-          'reason': 'Access Restricted: Only Traffic Police or Admin can modify traffic lights.',
+          'reason': 'Restricted: Traffic Police or Admin role required.',
         };
       }
 
@@ -178,113 +111,199 @@ class BleTrafficService {
         return {
           'isAuthorized': false,
           'role': role,
-          'isVerified': false,
-          'verificationStatus': data['verificationStatus'] ?? 'PENDING',
-          'reason': 'Verification Required: Your Traffic Police account is pending Admin approval.',
+          'reason': 'Pending: Traffic Police account awaiting Admin approval.',
         };
       }
 
       return {
         'isAuthorized': true,
         'role': role,
-        'isVerified': true,
-        'name': data['name'] ?? data['fullName'] ?? 'Traffic Officer',
+        'name': data['name'] ?? data['fullName'] ?? 'Officer',
         'policeId': data['policeId'] ?? '',
         'intersection': data['assignedIntersection'] ?? '',
       };
     } catch (e) {
-      return {
-        'isAuthorized': false,
-        'role': 'unknown',
-        'isVerified': false,
-        'reason': 'Error checking authorization: $e',
-      };
+      return {'isAuthorized': false, 'role': 'unknown', 'reason': '$e'};
     }
   }
 
-  // ── Authentication (HMAC challenge-response) ───────────────────────────────
-  /// 3-step handshake:
-  /// 1. App writes its Firebase UID + verified role to authChar
-  /// 2. ESP32 notifies a random 16-byte challenge
-  /// 3. App writes HMAC-SHA256(challenge, sharedSecret) back
-  Future<void> _authenticate() async {
-    _authenticated = false;
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) throw Exception('Not logged in');
+  // ── Manual Scan ────────────────────────────────────────────────────────────
+  Stream<List<TrafficLightDevice>> scan({Duration timeout = const Duration(seconds: 10)}) async* {
+    final found = <String, TrafficLightDevice>{};
+    await FlutterBluePlus.startScan(
+      withServices: [Guid(kTrafficServiceUUID)],
+      timeout: timeout,
+    );
+    await for (final results in FlutterBluePlus.scanResults) {
+      for (final r in results) {
+        found[r.device.remoteId.str] = TrafficLightDevice(
+          device: r.device,
+          name: r.device.platformName.isNotEmpty ? r.device.platformName : 'ESP32 Traffic Light',
+          rssi: r.rssi,
+        );
+      }
+      yield found.values.toList();
+    }
+  }
 
-    // Strict role check: only verified traffic_police or admin allowed
-    final authStatus = await checkUserAuthorization();
-    if (authStatus['isAuthorized'] != true) {
-      throw Exception(authStatus['reason'] ?? 'Access denied: Traffic Police authorization required.');
+  Future<void> stopScan() => FlutterBluePlus.stopScan();
+
+  // ── Auto-Connect ───────────────────────────────────────────────────────────
+  Future<void> startAutoConnect({
+    void Function(TrafficLightDevice dev)? onConnected,
+    void Function()? onDisconnected,
+    void Function(String msg)? onError,
+  }) async {
+    if (_autoConnectEnabled) return;
+
+    final permOk = await requestPermissions();
+    if (!permOk) {
+      onError?.call('Bluetooth permissions not granted.');
+      return;
     }
 
-    final role = authStatus['role'] as String;
+    final auth = await checkUserAuthorization();
+    if (auth['isAuthorized'] != true) {
+      onError?.call(auth['reason'] as String? ?? 'Unauthorized.');
+      return;
+    }
 
-    // Step 1 — send identity with verified role
-    final identity = jsonEncode({'uid': user.uid, 'role': role});
-    await _authChar!.write(utf8.encode(identity), withoutResponse: false);
+    _autoConnectEnabled = true;
+    _runAutoScan(onConnected, onDisconnected, onError);
+  }
 
-    // Step 2 — read challenge (ESP32 replies via notify; we poll once for simplicity)
-    await Future.delayed(const Duration(milliseconds: 500));
-    final challenge = await _authChar!.read();
+  Future<void> _runAutoScan(
+    void Function(TrafficLightDevice dev)? onConnected,
+    void Function()? onDisconnected,
+    void Function(String msg)? onError,
+  ) async {
+    if (!_autoConnectEnabled || isConnected || _autoConnecting) return;
 
-    if (challenge.isEmpty) throw Exception('No challenge received from ESP32');
+    _autoScanSub?.cancel();
+    await FlutterBluePlus.startScan(withServices: [Guid(kTrafficServiceUUID)]);
 
-    // Step 3 — send HMAC response
-    final key    = utf8.encode(kSharedSecret);
-    final hmac   = Hmac(sha256, key);
-    final digest = hmac.convert(challenge);
-    final resp   = jsonEncode({'hmac': digest.toString(), 'uid': user.uid});
-    await _authChar!.write(utf8.encode(resp), withoutResponse: false);
+    _autoScanSub = FlutterBluePlus.scanResults.listen((results) async {
+      if (!_autoConnectEnabled || _autoConnecting || isConnected || results.isEmpty) return;
 
-    // Wait for auth-ok status
-    await Future.delayed(const Duration(milliseconds: 600));
-    final statusBytes = await _statusChar!.read();
-    if (statusBytes.isNotEmpty) {
+      final best = results.reduce((a, b) => a.rssi >= b.rssi ? a : b);
+      _autoConnecting = true;
+      await FlutterBluePlus.stopScan();
+      _autoScanSub?.cancel();
+
+      final dev = TrafficLightDevice(
+        device: best.device,
+        name: best.device.platformName.isNotEmpty ? best.device.platformName : 'ESP32 Traffic Light',
+        rssi: best.rssi,
+      );
+
       try {
-        final j = jsonDecode(utf8.decode(statusBytes)) as Map<String, dynamic>;
-        _authenticated = j['auth'] as bool? ?? false;
-      } catch (_) {}
-    }
+        await connect(best.device);
+        _autoConnecting = false;
 
-    if (!_authenticated) throw Exception('Authentication rejected by ESP32 (Role or signature invalid)');
+        _connSub?.cancel();
+        _connSub = best.device.connectionState.listen((state) {
+          if (state == BluetoothConnectionState.disconnected && _autoConnectEnabled) {
+            _cmdChar = _statusChar = null;
+            onDisconnected?.call();
+            Future.delayed(const Duration(seconds: 3), () {
+              _runAutoScan(onConnected, onDisconnected, onError);
+            });
+          }
+        });
+
+        onConnected?.call(dev);
+      } catch (e) {
+        _autoConnecting = false;
+        onError?.call(e.toString());
+        if (_autoConnectEnabled) {
+          Future.delayed(const Duration(seconds: 4), () {
+            _runAutoScan(onConnected, onDisconnected, onError);
+          });
+        }
+      }
+    });
   }
 
-  // ── Command sending ────────────────────────────────────────────────────────
-  Future<void> _sendCommand(Map<String, dynamic> payload) async {
-    if (!isConnected)     throw Exception('Not connected');
-    if (!_authenticated)  throw Exception('Not authenticated');
+  Future<void> stopAutoConnect() async {
+    _autoConnectEnabled = false;
+    _autoConnecting     = false;
+    _autoScanSub?.cancel();
+    _connSub?.cancel();
+    _autoScanSub = null;
+    _connSub     = null;
+    await FlutterBluePlus.stopScan();
+  }
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null)     throw Exception('Not logged in');
-
-    // Re-verify authorization before sending command
-    final authStatus = await checkUserAuthorization();
-    if (authStatus['isAuthorized'] != true) {
-      throw Exception('Unauthorized: Only Traffic Police or Admin can send traffic light commands.');
+  // ── Connection ─────────────────────────────────────────────────────────────
+  Future<void> connect(BluetoothDevice device) async {
+    final auth = await checkUserAuthorization();
+    if (auth['isAuthorized'] != true) {
+      throw Exception(auth['reason'] ?? 'Unauthorized.');
     }
 
-    // Build signed command
-    final ts    = DateTime.now().millisecondsSinceEpoch;
-    final cmd   = payload['cmd'] as String;
-    final msg   = '$cmd${user.uid}$ts';
-    final key   = utf8.encode(kSharedSecret);
-    final hmac  = Hmac(sha256, key);
-    final sig   = hmac.convert(utf8.encode(msg)).toString();
+    _device = device;
+    await device.connect(
+      license: License.nonprofit,
+      autoConnect: false,
+      timeout: const Duration(seconds: 12),
+    );
 
-    final full  = {
+    final services = await device.discoverServices();
+    for (final s in services) {
+      if (s.uuid == Guid(kTrafficServiceUUID)) {
+        for (final c in s.characteristics) {
+          if (c.uuid == Guid(kCommandCharUUID)) _cmdChar = c;
+          if (c.uuid == Guid(kStatusCharUUID))  _statusChar = c;
+        }
+        break;
+      }
+    }
+
+    if (_cmdChar == null || _statusChar == null) {
+      throw Exception('Traffic light BLE characteristics not found.');
+    }
+
+    await _statusChar!.setNotifyValue(true);
+    _statusChar!.lastValueStream.listen((bytes) {
+      if (bytes.isEmpty) return;
+      try {
+        final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+        _statusController.add(TrafficLightStatus.fromJson(json));
+      } catch (_) {}
+    });
+  }
+
+  Future<void> disconnect() async {
+    await _device?.disconnect();
+    _device     = null;
+    _cmdChar    = null;
+    _statusChar = null;
+  }
+
+  // ── Commands ───────────────────────────────────────────────────────────────
+  Future<void> _sendCommand(Map<String, dynamic> payload) async {
+    if (!isConnected || _cmdChar == null) {
+      throw Exception('Not connected to traffic light.');
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) throw Exception('Not logged in.');
+
+    final auth = await checkUserAuthorization();
+    if (auth['isAuthorized'] != true) {
+      throw Exception('Unauthorized: Traffic Police role required.');
+    }
+
+    final body = {
       ...payload,
-      'uid': user.uid,
-      'ts': ts,
-      'sig': sig,
+      'pass': kPolicePasscode,
+      'role': auth['role'],
+      'uid':  user.uid,
     };
 
-    final bytes = utf8.encode(jsonEncode(full));
-    // BLE write with response for reliability
-    await _cmdChar!.write(bytes, withoutResponse: false);
+    await _cmdChar!.write(utf8.encode(jsonEncode(body)), withoutResponse: false);
   }
 
-  // ── Public commands ────────────────────────────────────────────────────────
   Future<void> setRed()    => _sendCommand({'cmd': 'RED'});
   Future<void> setYellow() => _sendCommand({'cmd': 'YELLOW'});
   Future<void> setGreen()  => _sendCommand({'cmd': 'GREEN'});
@@ -294,17 +313,17 @@ class BleTrafficService {
     required int yellowSec,
     required int redSec,
   }) => _sendCommand({
-    'cmd':       'AUTO',
-    'green_sec': greenSec,
+    'cmd':        'AUTO',
+    'green_sec':  greenSec,
     'yellow_sec': yellowSec,
-    'red_sec':   redSec,
+    'red_sec':    redSec,
   });
 
   Future<void> setManualMode() => _sendCommand({'cmd': 'MANUAL'});
-
   Future<void> requestStatus() => _sendCommand({'cmd': 'STATUS'});
 
   void dispose() {
+    stopAutoConnect();
     _statusController.close();
     disconnect();
   }

@@ -628,7 +628,7 @@ class _SecurityBanner extends StatelessWidget {
                 Text('Traffic Police Controlled Signal',
                     style: GoogleFonts.poppins(fontWeight: FontWeight.w700,
                         fontSize: 13, color: AppColors.infoBlue)),
-                Text('Only verified Traffic Police & Admins can issue BLE commands. HMAC-SHA256 signature + replay protection.',
+                Text('Only verified Traffic Police & Admins can issue BLE commands. Protected with Secret Passcode Verification.',
                     style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFF1565C0), height: 1.4)),
               ],
             ),
@@ -958,10 +958,10 @@ class _SecurityDetailsCard extends StatelessWidget {
           ...[
             ('Required Role',     'Traffic Police / Admin only', AppColors.infoBlue),
             ('Verification',      'Admin verified credentials', AppColors.infoBlue),
-            ('Session Handshake', isAuthenticated ? 'HMAC-SHA256 Challenge-Response ✓' : 'Pending connection…',
+            ('Connection',        isAuthenticated ? 'Connected & Authorized ✓' : 'Ready to connect',
                 isAuthenticated ? AppColors.success : AppColors.warning),
-            ('Replay Window',     'Timestamp ±30s freshness window', AppColors.infoBlue),
-            ('Command Signing',   'HMAC-SHA256 per command packet', AppColors.infoBlue),
+            ('Protection',        'Pre-Shared Traffic Police Passcode', AppColors.infoBlue),
+            ('Command Validation','Real-time ESP32 verification', AppColors.infoBlue),
           ].map((row) => Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Row(
