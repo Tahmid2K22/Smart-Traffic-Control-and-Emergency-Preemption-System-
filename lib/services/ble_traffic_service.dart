@@ -97,17 +97,16 @@ class BleTrafficService {
       final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final data = doc.data() ?? {};
       final role = data['role'] as String? ?? 'user';
-      final isVerified = (data['isVerified'] == true && data['verificationStatus'] == 'APPROVED') || role == 'admin';
-
-      if (role != 'traffic_police' && role != 'admin') {
+      if (role != 'traffic_police') {
         return {
           'isAuthorized': false,
           'role': role,
-          'reason': 'Restricted: Traffic Police or Admin role required.',
+          'reason': 'Restricted: Traffic light can only be controlled by verified Traffic Police officers.',
         };
       }
 
-      if (role == 'traffic_police' && !isVerified) {
+      final isVerified = data['isVerified'] == true && data['verificationStatus'] == 'APPROVED';
+      if (!isVerified) {
         return {
           'isAuthorized': false,
           'role': role,
@@ -235,20 +234,7 @@ class BleTrafficService {
   }
 
   // ── Connection ─────────────────────────────────────────────────────────────
-  Future<void> connect(BluetoothDevice device) async {
-    final auth = await checkUserAuthorization();
-    if (auth['isAuthorized'] != true) {
-      throw Exception(auth['reason'] ?? 'Unauthorized.');
-    }
-
-    _device = device;
-    await device.connect(
-      license: License.nonprofit,
-      autoConnect: false,
-      timeout: const Duration(seconds: 12),
-    );
-
-    final services = await device.discoverServices();
+  void _findChars(List<BluetoothService> services) {
     for (final s in services) {
       if (s.uuid == Guid(kTrafficServiceUUID)) {
         for (final c in s.characteristics) {
@@ -258,9 +244,46 @@ class BleTrafficService {
         break;
       }
     }
+  }
+
+  Future<void> connect(BluetoothDevice device) async {
+    final auth = await checkUserAuthorization();
+    if (auth['isAuthorized'] != true) {
+      throw Exception(auth['reason'] ?? 'Unauthorized.');
+    }
+
+    _device = device;
+    _cmdChar  = null;   // clear any stale chars left over from a previous session
+    _statusChar = null;
+
+    await device.connect(
+      license: License.nonprofit,
+      autoConnect: false,
+      timeout: const Duration(seconds: 12),
+    );
+
+    var services = await device.discoverServices();
+    _findChars(services);
+
+    // Android caches the GATT table; if the ESP32 firmware was re-flashed the
+    // cache is stale and the characteristics look "missing". Refresh once.
+    if (!kIsWeb && Platform.isAndroid && (_cmdChar == null || _statusChar == null)) {
+      try {
+        await device.clearGattCache();
+        services = await device.discoverServices();
+        _findChars(services);
+      } catch (e) {
+        debugPrint('[BLE] GATT cache refresh failed: $e');
+      }
+    }
 
     if (_cmdChar == null || _statusChar == null) {
-      throw Exception('Traffic light BLE characteristics not found.');
+      throw Exception(
+        'Traffic light BLE characteristics not found. '
+        'Check that the ESP32 is running the matching firmware '
+        '(service $kTrafficServiceUUID) and toggle the phone\'s Bluetooth '
+        'off/on once if it previously connected to an older firmware.',
+      );
     }
 
     await _statusChar!.setNotifyValue(true);

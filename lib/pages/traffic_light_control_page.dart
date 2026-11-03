@@ -253,8 +253,8 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage>
             const SizedBox(height: 12),
             Text(
               isPending
-                  ? 'Your Traffic Police registration is currently under review by an administrator.\n\nOnce approved in the Admin Verification Dashboard, you will be authorized to connect and control traffic light signals.'
-                  : 'Traffic light modification is restricted strictly to verified Traffic Police officers and system administrators.\n\nCurrent role: $role',
+                  ? 'Your Traffic Police registration is currently under review by an administrator.\n\nOnce approved by an Admin, you will be authorized to connect and control traffic light signals.'
+                  : 'Traffic light control is restricted strictly to verified Traffic Police officers.\n\nCurrent role: $role',
               style: GoogleFonts.poppins(
                 fontSize: 14,
                 color: AppColors.textGrey,
@@ -628,7 +628,7 @@ class _SecurityBanner extends StatelessWidget {
                 Text('Traffic Police Controlled Signal',
                     style: GoogleFonts.poppins(fontWeight: FontWeight.w700,
                         fontSize: 13, color: AppColors.infoBlue)),
-                Text('Only verified Traffic Police & Admins can issue BLE commands. Protected with Secret Passcode Verification.',
+                Text('Only verified Traffic Police officers can issue BLE commands. Protected with Secret Passcode Verification.',
                     style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFF1565C0), height: 1.4)),
               ],
             ),
@@ -956,8 +956,8 @@ class _SecurityDetailsCard extends StatelessWidget {
           ]),
           const SizedBox(height: 12),
           ...[
-            ('Required Role',     'Traffic Police / Admin only', AppColors.infoBlue),
-            ('Verification',      'Admin verified credentials', AppColors.infoBlue),
+            ('Required Role',     'Traffic Police only', AppColors.infoBlue),
+            ('Verification',      'Admin approved officer credentials', AppColors.infoBlue),
             ('Connection',        isAuthenticated ? 'Connected & Authorized ✓' : 'Ready to connect',
                 isAuthenticated ? AppColors.success : AppColors.warning),
             ('Protection',        'Pre-Shared Traffic Police Passcode', AppColors.infoBlue),

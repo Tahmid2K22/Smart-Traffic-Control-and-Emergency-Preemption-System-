@@ -346,7 +346,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                       children: [
                         Text('Traffic Light Control',
                             style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
-                        Text('BLE Secure HMAC-SHA256',
+                        Text('Traffic Police Only • Passcode Protected',
                             style: GoogleFonts.poppins(fontSize: 12, color: Color(0xCCFFFFFF))),
                       ],
                     ),

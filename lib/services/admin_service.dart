@@ -115,10 +115,50 @@ class AdminService {
         'clearedAt': FieldValue.serverTimestamp(),
       });
 
-  // regular users and admins
+  // regular users, admins, and traffic police
   Stream<QuerySnapshot> allUsersStream() => _firestore
       .collection('users')
-      .where('role', whereIn: ['patient', 'user', 'admin']).snapshots();
+      .where('role', whereIn: ['patient', 'user', 'admin', 'traffic_police']).snapshots();
+
+  // make a user traffic police
+  Future<void> makeTrafficPolice(
+    String uid, {
+    String name = '',
+    String policeId = '',
+    String assignedIntersection = '',
+  }) async {
+    await _firestore.collection('users').doc(uid).update({
+      'role': 'traffic_police',
+      'isVerified': true,
+      'verificationStatus': 'APPROVED',
+      'isActive': false,
+      if (policeId.isNotEmpty) 'policeId': policeId,
+      if (assignedIntersection.isNotEmpty)
+        'assignedIntersection': assignedIntersection,
+    });
+    await _writeLog(
+      action: 'make_traffic_police',
+      targetType: 'user',
+      targetId: uid,
+      targetName: name,
+    );
+  }
+
+  // revoke traffic police powers back to standard user
+  Future<void> removeTrafficPolice(String uid, {String name = ''}) async {
+    await _firestore.collection('users').doc(uid).update({
+      'role': 'user',
+      'isVerified': false,
+      'verificationStatus': 'NONE',
+      'isActive': false,
+    });
+    await _writeLog(
+      action: 'remove_traffic_police',
+      targetType: 'user',
+      targetId: uid,
+      targetName: name,
+    );
+  }
 
   // approve driver
   Future<void> verifyDriver(String uid, {String name = ''}) async {

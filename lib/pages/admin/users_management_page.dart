@@ -53,7 +53,7 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
+          const Icon(
             Icons.people_outline_rounded,
             size: 64,
             color: AppColors.textLight,
@@ -73,7 +73,7 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
   }
 }
 
-// user card widget
+// User card widget
 class _UserCard extends StatefulWidget {
   final String uid;
   final Map<String, dynamic> data;
@@ -117,7 +117,7 @@ class _UserCardState extends State<_UserCard> {
           style: GoogleFonts.poppins(fontWeight: FontWeight.w700),
         ),
         content: Text(
-          'Are you sure you want to delete "${widget.data['name']}"? This action cannot be undone.',
+          'Are you sure you want to delete "${widget.data['name'] ?? 'User'}"? This action cannot be undone.',
           style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey),
         ),
         actions: [
@@ -144,24 +144,125 @@ class _UserCardState extends State<_UserCard> {
     );
   }
 
+  void _showMakeTrafficPoliceDialog(BuildContext ctx) {
+    final policeIdCtrl = TextEditingController(
+      text: widget.data['policeId']?.toString() ?? '',
+    );
+    final intersectionCtrl = TextEditingController(
+      text: widget.data['assignedIntersection']?.toString() ?? '',
+    );
+    final name = (widget.data['name'] ?? widget.data['fullName'] ?? 'User').toString();
+
+    showDialog(
+      context: ctx,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE8F5E9),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.local_police_rounded, color: Color(0xFF2E7D32), size: 22),
+            ),
+            10.widthBox,
+            Expanded(
+              child: Text(
+                'Make Traffic Police',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 17),
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Assign Traffic Police role to "$name". This authorizes the user to communicate with and control ESP32 traffic light signals.',
+                style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
+              ),
+              16.heightBox,
+              TextField(
+                controller: policeIdCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Police / Badge ID (optional)',
+                  hintText: 'e.g. TP-402',
+                  prefixIcon: const Icon(Icons.badge_outlined, size: 20),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+              ),
+              12.heightBox,
+              TextField(
+                controller: intersectionCtrl,
+                decoration: InputDecoration(
+                  labelText: 'Assigned Intersection (optional)',
+                  hintText: 'e.g. Kakrail Crossing',
+                  prefixIcon: const Icon(Icons.traffic_outlined, size: 20),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: Text('Cancel', style: GoogleFonts.poppins(color: AppColors.textGrey)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(dialogCtx);
+              _doAction(() => widget.adminService.makeTrafficPolice(
+                widget.uid,
+                name: name,
+                policeId: policeIdCtrl.text.trim(),
+                assignedIntersection: intersectionCtrl.text.trim(),
+              ));
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2E7D32),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: Text('Assign Police Role', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final data = widget.data;
-    final bool isAdmin = data['role'] == 'admin';
-    final String name = data['name'] ?? 'Unknown';
+    final String role = (data['role'] as String? ?? 'user').toLowerCase();
+    final bool isAdmin = role == 'admin';
+    final bool isTrafficPolice = role == 'traffic_police';
+    final String name = data['name'] ?? data['fullName'] ?? 'Unknown';
     final String email = data['email'] ?? 'Unknown';
     final String phone = data['phone'] ?? 'Unknown';
     final String city = data['city'] ?? 'Unknown';
+    final String? policeId = data['policeId']?.toString();
+    final String? intersection = data['assignedIntersection']?.toString();
+
+    Color borderColor = AppColors.cardBorder;
+    if (isAdmin) {
+      borderColor = AppColors.accentOrange.withValues(alpha: 0.4);
+    } else if (isTrafficPolice) {
+      borderColor = const Color(0xFF2E7D32).withValues(alpha: 0.4);
+    }
 
     return Container(
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isAdmin
-              ? AppColors.primary.withValues(alpha: 0.3)
-              : AppColors.cardBorder,
-        ),
+        border: Border.all(color: borderColor),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.02),
@@ -181,9 +282,11 @@ class _UserCardState extends State<_UserCard> {
                 Container(
                   width: 48,
                   height: 48,
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: AppColors.background,
+                    color: isTrafficPolice
+                        ? const Color(0xFFE8F5E9)
+                        : (isAdmin ? const Color(0xFFFFF3E0) : AppColors.background),
                   ),
                   child: Center(
                     child: Text(
@@ -191,7 +294,9 @@ class _UserCardState extends State<_UserCard> {
                       style: GoogleFonts.poppins(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        color: AppColors.textGrey,
+                        color: isTrafficPolice
+                            ? const Color(0xFF2E7D32)
+                            : (isAdmin ? AppColors.accentOrange : AppColors.textGrey),
                       ),
                     ),
                   ),
@@ -222,17 +327,27 @@ class _UserCardState extends State<_UserCard> {
                   ),
                 ),
                 // Role badge
-                _RoleBadge(isAdmin: isAdmin),
+                _RoleBadge(role: role),
               ],
             ),
             12.heightBox,
             const Divider(height: 1, color: Color(0xFFF0F0F0)),
             12.heightBox,
-            // Info
+            // Info Rows
             _infoRow(Icons.phone_outlined, 'Phone', phone),
             6.heightBox,
             _infoRow(Icons.location_city_rounded, 'City', city),
-            12.heightBox,
+
+            if (isTrafficPolice && policeId != null && policeId.isNotEmpty) ...[
+              6.heightBox,
+              _infoRow(Icons.badge_outlined, 'Police ID', policeId),
+            ],
+            if (isTrafficPolice && intersection != null && intersection.isNotEmpty) ...[
+              6.heightBox,
+              _infoRow(Icons.traffic_outlined, 'Intersection', intersection),
+            ],
+
+            14.heightBox,
             // Actions
             if (_loading)
               const Center(
@@ -245,31 +360,66 @@ class _UserCardState extends State<_UserCard> {
             else
               Row(
                 children: [
-                  // Promote / Demote admin
-                  Expanded(
-                    child: _ActionButton(
-                      icon: isAdmin
-                          ? Icons.person_remove_rounded
-                          : Icons.admin_panel_settings_rounded,
-                      label: isAdmin ? 'Remove Admin' : 'Make Admin',
-                      color: isAdmin
-                          ? AppColors.accentOrange
-                          : AppColors.infoBlue,
-                      onTap: () => _doAction(
-                        () => isAdmin
-                            ? widget.adminService.removeAdmin(widget.uid)
-                            : widget.adminService.makeAdmin(widget.uid),
+                  // Role Toggle Button
+                  if (isTrafficPolice) ...[
+                    Expanded(
+                      child: _ActionButton(
+                        icon: Icons.person_remove_rounded,
+                        label: 'Remove Police',
+                        color: Colors.orange.shade800,
+                        onTap: () => _doAction(
+                          () => widget.adminService.removeTrafficPolice(widget.uid, name: name),
+                        ),
                       ),
                     ),
-                  ),
+                  ] else if (isAdmin) ...[
+                    Expanded(
+                      child: _ActionButton(
+                        icon: Icons.person_remove_rounded,
+                        label: 'Remove Admin',
+                        color: AppColors.accentOrange,
+                        onTap: () => _doAction(
+                          () => widget.adminService.removeAdmin(widget.uid, name: name),
+                        ),
+                      ),
+                    ),
+                  ] else ...[
+                    // User or Patient -> Provide "Make Traffic Police" + "Make Admin"
+                    Expanded(
+                      child: _ActionButton(
+                        icon: Icons.local_police_rounded,
+                        label: 'Make Police',
+                        color: const Color(0xFF2E7D32),
+                        onTap: () => _showMakeTrafficPoliceDialog(context),
+                      ),
+                    ),
+                    8.widthBox,
+                    Expanded(
+                      child: _ActionButton(
+                        icon: Icons.admin_panel_settings_rounded,
+                        label: 'Make Admin',
+                        color: AppColors.infoBlue,
+                        onTap: () => _doAction(
+                          () => widget.adminService.makeAdmin(widget.uid, name: name),
+                        ),
+                      ),
+                    ),
+                  ],
+
                   8.widthBox,
-                  // delete
-                  Expanded(
-                    child: _ActionButton(
-                      icon: Icons.delete_outline_rounded,
-                      label: 'Delete',
-                      color: Colors.red.shade700,
-                      onTap: () => _confirmDelete(context),
+                  // Delete button
+                  SizedBox(
+                    width: 44,
+                    height: 40,
+                    child: OutlinedButton(
+                      onPressed: () => _confirmDelete(context),
+                      style: OutlinedButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        foregroundColor: Colors.red.shade700,
+                        side: BorderSide(color: Colors.red.shade300),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Icon(Icons.delete_outline_rounded, size: 20),
                     ),
                   ),
                 ],
@@ -317,35 +467,38 @@ class _UserCardState extends State<_UserCard> {
   }
 }
 
-// small reusable widgets
+// Role badge with dynamic colors & icons
 class _RoleBadge extends StatelessWidget {
-  final bool isAdmin;
-  const _RoleBadge({required this.isAdmin});
+  final String role;
+  const _RoleBadge({required this.role});
 
   @override
   Widget build(BuildContext context) {
+    final (color, icon, label) = switch (role) {
+      'admin'          => (AppColors.accentOrange, Icons.admin_panel_settings_rounded, 'Admin'),
+      'traffic_police' => (const Color(0xFF2E7D32), Icons.local_police_rounded, 'Traffic Police'),
+      'patient'        => (AppColors.infoBlue, Icons.person_rounded, 'Patient'),
+      _                => (AppColors.primary, Icons.person_rounded, 'User'),
+    };
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.transparent,
-        border: Border.all(color: isAdmin ? AppColors.accentOrange : AppColors.primary),
+        color: color.withValues(alpha: 0.08),
+        border: Border.all(color: color),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            isAdmin ? Icons.admin_panel_settings_rounded : Icons.person_rounded,
-            size: 12,
-            color: isAdmin ? AppColors.accentOrange : AppColors.primary,
-          ),
+          Icon(icon, size: 12, color: color),
           4.widthBox,
           Text(
-            isAdmin ? 'Admin' : 'User',
+            label,
             style: GoogleFonts.poppins(
               fontSize: 11,
               fontWeight: FontWeight.w600,
-              color: isAdmin ? AppColors.accentOrange : AppColors.primary,
+              color: color,
             ),
           ),
         ],
