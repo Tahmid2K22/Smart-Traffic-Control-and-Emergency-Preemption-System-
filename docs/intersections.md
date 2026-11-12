@@ -11,11 +11,38 @@ Using Google's [Open Location Code Python implementation](https://github.com/goo
 
 The supplied recovery and center are correct. Short codes require a nearby reference; this verifies the geographic code, not the existence or official name of a road intersection.
 
-## Directory and app flow
+## Default Khulna directory
 
-Firestore `intersections/{id}` stores `name`, `city`, numeric `latitude`/`longitude`, `plusCode`, and boolean `isActive`, with creation/update metadata. Admin saves also write a `location` GeoPoint; the seed includes `fullPlusCode` but does not require `location`.
+Opening the admin intersections page calls `IntersectionService.seedKhulnaIntersections()` to idempotently seed these four records:
 
-Opening the admin intersections page automatically calls `IntersectionService.seedKhulnaIntersection()`. Its transaction creates `khulna_vgx3_g39` only if absent, so repeated openings neither duplicate nor overwrite it. Admins can add/edit entries and enable/disable them. `IntersectionService` checks the signed-in user's `users/{uid}.role == 'admin'` in app code.
+| Intersection | Short Plus Code | Full Plus Code | Latitude | Longitude |
+| --- | --- | --- | --- | --- |
+| VGX3+G39, Khulna | `VGX3+G39` | `7MJFVGX3+G39` | 22.8987875 | 89.502734375 |
+| Moylapota Mor | `RGPQ+37` | `7MJFRGPQ+37` | 22.8351875 | 89.5381875 |
+| Royal Mor | `RH66+4W2` | `7MJFRH66+4W2` | 22.8102625 | 89.562265625 |
+| Shibbari Mor | `RHC3+V3` | `7MJFRHC3+V3` | 22.8221875 | 89.5526875 |
+
+The seed creates missing records without duplicating them or overwriting existing directory edits, controller mappings, or traffic-light states. The original record retains ID `khulna_vgx3_g39`. Reopening or retrying initialization is safe; seeding is not a signal reset or hardware command.
+
+## Directory schema and app flow
+
+Firestore `intersections/{id}` stores `name`, `city`, numeric `latitude`/`longitude`, `plusCode`, and boolean `isActive`, with creation/update metadata. Admin saves also write a `location` GeoPoint; seeds include `fullPlusCode` but do not require `location`.
+
+New intersections default to **4 ways and 4 traffic lights**. `IntersectionPoint.directions` is `['north', 'east', 'south', 'west']`; `wayCount` and `trafficLightCount` both return `4`. The `lights` getter returns all four directions, including unconfigured lights for missing configuration. Each direction has its own separate light ID. `toMap()` stores:
+
+```text
+wayCount: 4
+trafficLightCount: 4
+trafficLights:
+  north: {id: <distinct north light ID>, direction: north, controllerId: null, state: UNKNOWN}
+  east:  {id: <distinct east light ID>, direction: east, controllerId: null, state: UNKNOWN}
+  south: {id: <distinct south light ID>, direction: south, controllerId: null, state: UNKNOWN}
+  west:  {id: <distinct west light ID>, direction: west, controllerId: null, state: UNKNOWN}
+```
+
+`IntersectionTrafficLight` contains string `id`, string `direction`, nullable string `controllerId`, and string `state` (default `UNKNOWN`). These are directory configuration fields, not verified live telemetry. There is currently no live hardware controller mapping. The admin page shows a read-only four-way diagram with North at the top, East at the right, South at the bottom, West at the left, and the intersection in the center. Light indicators are neutral gray and labeled `UNKNOWN`, with `Unconfigured` for missing controller mappings; they never infer live red/green states from stored data. Driver cards show only the concise four-way/four-light summary. Neither page adds signal-state controls.
+
+Admins can add/edit entries and enable/disable directory availability; this does not change physical signals. `IntersectionService` checks the signed-in user's `users/{uid}.role == 'admin'` in app code.
 
 Drivers open intersection search from the dashboard or tracking page. The manual-request contract is:
 
@@ -25,7 +52,11 @@ Drivers open intersection search from the dashboard or tracking page. The manual
 
 `TrafficService.requestEmergencyEscape` implements these checks and re-reads the intersection and matched officers in the alert-write transaction. GPS readings older than 30 seconds or with reported accuracy worse than 100 m are rejected. Repeated requests do not overwrite active alerts or immediately reopen cleared/overridden ones (one-minute cooldown). Existing automatic route alerts also use the 500 m approach limit, with an additional heading check; manual requests do not require a heading.
 
-The seed was inserted into project `e-ambulance-system-001` at `intersections/khulna_vgx3_g39` on 2026-11-03 through the existing Firebase CLI account. The API confirmed the stored coordinates and active status. GPS/on-device notification delivery has not been tested end to end.
+All four entries have been written to project `e-ambulance-system-001` through the existing Firebase CLI account and read back for verification. IDs are `khulna_vgx3_g39`, `khulna_moylapota_mor`, `khulna_royal_mor`, and `khulna_shibbari_mor`. Each stored document has `wayCount: 4`, `trafficLightCount: 4`, and distinct North/East/South/West light records. Existing document edits, controller mappings, and states were preserved using conditional writes. The three new centers were independently decoded using `openlocationcode` 1.0.1 with a Khulna reference. GPS/on-device notification delivery has not been tested end to end.
+
+## Hardware limitations
+
+The current BLE command/status contract represents a **single lamp**, not four independent directional traffic lights; four-way hardware firmware is not established by this repository. The four-way directory model does **not** establish four-way hardware capability, assign physical controllers, or synchronize live signal states. These UI/schema/default-record changes make **no automatic hardware changes** and send no signal commands. Four-way hardware support would require separate firmware, controller mapping, protocol, and safety validation work.
 
 ## Critical deployment/security requirements
 
@@ -63,4 +94,4 @@ match /intersections/{intersectionId} {
 }
 ```
 
-This snippet only covers the directory; adapt metadata/allowed-field constraints to the existing schema. Ensure users cannot self-assign or self-change `role` or `isApproved` in `users/{uid}` (including profile creation). **App-level admin/approved-driver checks are not server security.** Separately secure `emergency_alerts` with server rules and/or a trusted backend for authorized creation, recipients, field validation, and state transitions. Modified clients can bypass Dart checks; client GPS can be spoofed, so even server distance validation against submitted coordinates does not prove physical proximity. No rules were deployed.
+This snippet only covers basic directory fields; it does not validate the four-way traffic-light schema. Before deployment, adapt metadata/allowed-field constraints and validate `wayCount == 4`, `trafficLightCount == 4`, all four directional map entries, distinct light IDs, matching directions, nullable string controller IDs, and permitted state values against the existing schema. Ensure users cannot self-assign or self-change `role` or `isApproved` in `users/{uid}` (including profile creation). **App-level admin/approved-driver checks are not server security.** Separately secure `emergency_alerts` with server rules and/or a trusted backend for authorized creation, recipients, field validation, and state transitions. Modified clients can bypass Dart checks; client GPS can be spoofed, so even server distance validation against submitted coordinates does not prove physical proximity. No rules were deployed.

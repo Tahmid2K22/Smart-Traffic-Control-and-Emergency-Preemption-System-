@@ -24,20 +24,27 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _login() async {
     setState(() => _isLoading = true);
     try {
-      final userCredential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
+      final userCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
 
       // Fetch user info from Firestore and save locally
       if (userCredential.user != null) {
         try {
-          final doc = await FirebaseFirestore.instance.collection('users').doc(userCredential.user!.uid).get();
+          final doc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(userCredential.user!.uid)
+              .get();
           if (doc.exists) {
             final data = doc.data()!;
             final prefs = await SharedPreferences.getInstance();
             await prefs.setString('userName', data['name'] ?? '');
-            await prefs.setString('userEmail', data['email'] ?? userCredential.user!.email ?? '');
+            await prefs.setString(
+              'userEmail',
+              data['email'] ?? userCredential.user!.email ?? '',
+            );
             await prefs.setString('userPhone', data['phone'] ?? '');
             await prefs.setString('userCity', data['city'] ?? '');
 
@@ -52,15 +59,26 @@ class _LoginPageState extends State<LoginPage> {
         }
       }
 
-      // Navigation is handled by AuthGate in main.dart
+      // Reveal AuthGate's role-based destination beneath this pushed login page.
+      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message ?? 'An error occurred during login.')),
+          SnackBar(
+            content: Text(e.message ?? 'An error occurred during login.'),
+          ),
         );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _openRegistration(Widget page) async {
+    await Navigator.of(context)
+        .push(MaterialPageRoute<void>(builder: (_) => page));
+    if (mounted && FirebaseAuth.instance.currentUser != null) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
     }
   }
 
@@ -75,6 +93,11 @@ class _LoginPageState extends State<LoginPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Sign in'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -158,14 +181,9 @@ class _LoginPageState extends State<LoginPage> {
                       style: GoogleFonts.poppins(color: AppColors.textLight),
                     ),
                     TextButton(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const RegisterPage(),
-                          ),
-                        );
-                      },
+                      onPressed: _isLoading
+                          ? null
+                          : () => _openRegistration(const RegisterPage()),
                       child: Text(
                         'Register',
                         style: GoogleFonts.poppins(
@@ -176,16 +194,15 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                   ],
                 ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  child: const Text('Continue browsing'),
+                ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const HospitalRegisterPage(),
-                      ),
-                    );
-                  },
+                  onPressed: _isLoading
+                      ? null
+                      : () => _openRegistration(const HospitalRegisterPage()),
                   icon: const Icon(
                     Icons.local_hospital_rounded,
                     color: AppColors.primary,
@@ -220,12 +237,12 @@ class _LoginPageState extends State<LoginPage> {
       decoration: InputDecoration(
         labelText: label,
         prefixIcon: Icon(icon, color: AppColors.primary),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: AppColors.textLight.withValues(alpha: 0.3)),
+          borderSide: BorderSide(
+            color: AppColors.textLight.withValues(alpha: 0.3),
+          ),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),

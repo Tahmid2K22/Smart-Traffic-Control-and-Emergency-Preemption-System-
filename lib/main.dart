@@ -1,10 +1,11 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
+
 import 'firebase_options.dart';
 
 import 'constants/colors.dart';
@@ -25,7 +26,9 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Load .env — never crash if file is missing
-  try { await AppConfig.load(); } catch (_) {}
+  try {
+    await AppConfig.load();
+  } catch (_) {}
 
   // Firebase is required — crash loudly if it fails
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -61,16 +64,41 @@ class SetupErrorApp extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 64),
+                const Icon(
+                  Icons.error_outline_rounded,
+                  color: Colors.redAccent,
+                  size: 64,
+                ),
                 const SizedBox(height: 24),
-                const Text('Setup Required', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black87)),
+                const Text(
+                  'Setup Required',
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                ),
                 const SizedBox(height: 16),
-                const Text('The app could not start because some environment variables are missing or invalid:', style: TextStyle(fontSize: 16, color: Colors.black54)),
+                const Text(
+                  'The app could not start because some environment variables are missing or invalid:',
+                  style: TextStyle(fontSize: 16, color: Colors.black54),
+                ),
                 const SizedBox(height: 24),
                 Container(
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.red.shade200)),
-                  child: Text(error, style: TextStyle(fontSize: 14, fontFamily: 'monospace', color: Colors.red.shade900)),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Text(
+                    error,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontFamily: 'monospace',
+                      color: Colors.red.shade900,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -108,8 +136,15 @@ class AuthGate extends StatelessWidget {
     return StreamBuilder<User?>(
       stream: FirebaseAuth.instance.authStateChanges(),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            ),
+          );
+        }
         if (!snapshot.hasData) {
-          return const LoginPage();
+          return const DashboardPage(key: ValueKey('guest'), isGuest: true);
         }
         // Role-based routing: check Firestore role
         return StreamBuilder<DocumentSnapshot>(
@@ -120,7 +155,9 @@ class AuthGate extends StatelessWidget {
           builder: (context, roleSnap) {
             if (!roleSnap.hasData) {
               return const Scaffold(
-                body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+                body: Center(
+                  child: CircularProgressIndicator(color: AppColors.primary),
+                ),
               );
             }
             final data = (roleSnap.data?.data() as Map<String, dynamic>?) ?? {};
@@ -130,7 +167,8 @@ class AuthGate extends StatelessWidget {
               return const AdminDashboardPage();
             }
             if (role == 'traffic_police') {
-              final isVerified = data['isVerified'] == true &&
+              final isVerified =
+                  data['isVerified'] == true &&
                   data['verificationStatus'] == 'APPROVED';
               if (!isVerified) {
                 return PendingVerificationScreen(
@@ -156,7 +194,7 @@ class AuthGate extends StatelessWidget {
               }
               return HospitalDashboardPage(profile: data);
             }
-            return const DashboardPage();
+            return DashboardPage(key: ValueKey(snapshot.data!.uid));
           },
         );
       },
@@ -179,13 +217,20 @@ class _HospitalPendingScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.hourglass_top_rounded,
-                  size: 64, color: AppColors.warning),
+              const Icon(
+                Icons.hourglass_top_rounded,
+                size: 64,
+                color: AppColors.warning,
+              ),
               const SizedBox(height: 20),
-              Text('$hospitalName is awaiting approval',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontSize: 22, fontWeight: FontWeight.w700)),
+              Text(
+                '$hospitalName is awaiting approval',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
               const SizedBox(height: 10),
               const Text(
                 'An administrator will review your registration. After approval, sign in again to manage services, specialties, beds, and map location.',
@@ -241,14 +286,21 @@ class _DriverGateState extends State<_DriverGate> {
     );
 
     final profile = await RequestService.getMyDriverProfile();
-    if (mounted) setState(() { _profile = profile; _loading = false; });
+    if (mounted) {
+      setState(() {
+        _profile = profile;
+        _loading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: AppColors.primary)),
+        body: Center(
+          child: CircularProgressIndicator(color: AppColors.primary),
+        ),
       );
     }
 
@@ -265,7 +317,9 @@ class _DriverGateState extends State<_DriverGate> {
 
 // main tab layout
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key});
+  const DashboardPage({super.key, this.isGuest = false});
+
+  final bool isGuest;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -274,24 +328,79 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   int _selectedTab = 0;
 
-  // tabs
-  static const List<Widget> _pages = [
-    HomePage(),
-    ActivityPage(),
-    ProfilePage(),
-  ];
+  void _selectTab(int index) {
+    setState(() => _selectedTab = index);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: _pages[_selectedTab],
+      body: widget.isGuest
+          ? HomePage(isGuest: true)
+          : switch (_selectedTab) {
+              1 => const ActivityPage(),
+              2 => const ProfilePage(),
+              _ => const HomePage(),
+            },
       bottomNavigationBar: _buildBottomNav(),
     );
   }
 
   // bottom navigation
   Widget _buildBottomNav() {
+    // Guests only see Home + a Login shortcut; Activity and Account are hidden.
+    final guestTabs = [
+      GButton(
+        icon: Icons.home_rounded,
+        text: 'Home',
+        textStyle: GoogleFonts.poppins(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: AppColors.primary,
+        ),
+      ),
+      GButton(
+        icon: Icons.login_rounded,
+        text: 'Login',
+        textStyle: GoogleFonts.poppins(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: AppColors.primary,
+        ),
+      ),
+    ];
+
+    final fullTabs = [
+      GButton(
+        icon: Icons.home_rounded,
+        text: 'Home',
+        textStyle: GoogleFonts.poppins(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: AppColors.primary,
+        ),
+      ),
+      GButton(
+        icon: Icons.receipt_long_rounded,
+        text: 'Activity',
+        textStyle: GoogleFonts.poppins(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: AppColors.primary,
+        ),
+      ),
+      GButton(
+        icon: Icons.person_rounded,
+        text: 'Account',
+        textStyle: GoogleFonts.poppins(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: AppColors.primary,
+        ),
+      ),
+    ];
+
     return Container(
       decoration: BoxDecoration(
         color: AppColors.white,
@@ -306,47 +415,45 @@ class _DashboardPageState extends State<DashboardPage> {
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: GNav(
-            gap: 8,
-            activeColor: AppColors.primary,
-            iconSize: 22,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            duration: const Duration(milliseconds: 400),
-            tabBackgroundColor: AppColors.primaryLight,
-            color: AppColors.textLight,
-            tabs: [
-              GButton(
-                icon: Icons.home_rounded,
-                text: 'Home',
-                textStyle: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.primary,
+          child: widget.isGuest
+              ? GNav(
+                  gap: 8,
+                  activeColor: AppColors.primary,
+                  iconSize: 22,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  duration: const Duration(milliseconds: 400),
+                  tabBackgroundColor: AppColors.primaryLight,
+                  color: AppColors.textLight,
+                  tabs: guestTabs,
+                  selectedIndex: 0,
+                  onTabChange: (index) {
+                    if (index == 1) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const LoginPage(),
+                        ),
+                      );
+                    }
+                  },
+                )
+              : GNav(
+                  gap: 8,
+                  activeColor: AppColors.primary,
+                  iconSize: 22,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  duration: const Duration(milliseconds: 400),
+                  tabBackgroundColor: AppColors.primaryLight,
+                  color: AppColors.textLight,
+                  tabs: fullTabs,
+                  selectedIndex: _selectedTab,
+                  onTabChange: _selectTab,
                 ),
-              ),
-              GButton(
-                icon: Icons.receipt_long_rounded,
-                text: 'Activity',
-                textStyle: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.primary,
-                ),
-              ),
-              GButton(
-                icon: Icons.person_rounded,
-                text: 'Account',
-                textStyle: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.primary,
-                ),
-              ),
-
-            ],
-            selectedIndex: _selectedTab,
-            onTabChange: (index) => setState(() => _selectedTab = index),
-          ),
         ),
       ),
     );
@@ -406,16 +513,25 @@ class _PendingApprovalScreen extends StatelessWidget {
               const SizedBox(height: 40),
               // Status badge
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.warningLight,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: AppColors.warning.withValues(alpha: 0.4)),
+                  border: Border.all(
+                    color: AppColors.warning.withValues(alpha: 0.4),
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.hourglass_top_rounded, color: AppColors.warning, size: 18),
+                    const Icon(
+                      Icons.hourglass_top_rounded,
+                      color: AppColors.warning,
+                      size: 18,
+                    ),
                     const SizedBox(width: 8),
                     Text(
                       'Status: Pending',
@@ -443,7 +559,9 @@ class _PendingApprovalScreen extends StatelessWidget {
                     foregroundColor: AppColors.textGrey,
                     side: const BorderSide(color: AppColors.cardBorder),
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                   ),
                 ),
               ),

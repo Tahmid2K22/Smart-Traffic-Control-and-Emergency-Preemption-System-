@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../constants/colors.dart';
 import '../constants/districts.dart';
 import 'hospital_register_page.dart';
@@ -43,7 +44,7 @@ class _ProfilePageState extends State<ProfilePage> {
       _email = prefs.getString('userEmail') ?? 'No Email';
       _phone = prefs.getString('userPhone') ?? 'No Phone';
       _city = prefs.getString('userCity');
-      
+
       // Update controllers as well
       _nameCtrl.text = _name;
       _emailCtrl.text = _email;
@@ -262,12 +263,7 @@ class _ProfilePageState extends State<ProfilePage> {
     bool isLast = false,
   }) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        16,
-        isFirst ? 16 : 12,
-        16,
-        isLast ? 16 : 12,
-      ),
+      padding: EdgeInsets.fromLTRB(16, isFirst ? 16 : 12, 16, isLast ? 16 : 12),
       child: Row(
         children: [
           Container(
@@ -309,9 +305,9 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _divider() => const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16),
-        child: Divider(height: 1, color: Color(0xFFEFEFEF)),
-      );
+    padding: EdgeInsets.symmetric(horizontal: 16),
+    child: Divider(height: 1, color: Color(0xFFEFEFEF)),
+  );
 
   // actions
   Widget _buildActionButtons(BuildContext context) {
@@ -451,7 +447,10 @@ class _ProfilePageState extends State<ProfilePage> {
                   4.heightBox,
                   Text(
                     'Edit your personal information below',
-                    style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: AppColors.textGrey,
+                    ),
                   ),
                   20.heightBox,
                   _editField(
@@ -475,7 +474,9 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   12.heightBox,
                   DropdownButtonFormField<String>(
-                    initialValue: bdDistricts.contains(tempCity) ? tempCity : null,
+                    initialValue: bdDistricts.contains(tempCity)
+                        ? tempCity
+                        : null,
                     hint: Text(
                       'Select City (District)',
                       style: GoogleFonts.poppins(fontSize: 13),
@@ -496,19 +497,33 @@ class _ProfilePageState extends State<ProfilePage> {
                     },
                     decoration: InputDecoration(
                       labelText: 'City',
-                      prefixIcon: const Icon(Icons.location_city_outlined, color: AppColors.primary, size: 20),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                      prefixIcon: const Icon(
+                        Icons.location_city_outlined,
+                        color: AppColors.primary,
+                        size: 20,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppColors.textLight.withValues(alpha: 0.2)),
+                        borderSide: BorderSide(
+                          color: AppColors.textLight.withValues(alpha: 0.2),
+                        ),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppColors.textLight.withValues(alpha: 0.2)),
+                        borderSide: BorderSide(
+                          color: AppColors.textLight.withValues(alpha: 0.2),
+                        ),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppColors.primary, width: 1.5),
+                        borderSide: BorderSide(
+                          color: AppColors.primary,
+                          width: 1.5,
+                        ),
                       ),
                     ),
                   ),
@@ -518,77 +533,88 @@ class _ProfilePageState extends State<ProfilePage> {
                     height: 50,
                     child: ElevatedButton(
                       onPressed: () async {
-                         // Capture context refs before any await
-                         final nav = Navigator.of(context);
-                         final messenger = ScaffoldMessenger.of(context);
+                        // Capture context refs before any await
+                        final nav = Navigator.of(context);
+                        final messenger = ScaffoldMessenger.of(context);
                         // Get current user to update Firestore
                         final user = FirebaseAuth.instance.currentUser;
-                        
+
                         setState(() {
-                          _name = _nameCtrl.text.trim().isEmpty ? _name : _nameCtrl.text.trim();
-                          _email = _emailCtrl.text.trim().isEmpty ? _email : _emailCtrl.text.trim();
-                          _phone = _phoneCtrl.text.trim().isEmpty ? _phone : _phoneCtrl.text.trim();
+                          _name = _nameCtrl.text.trim().isEmpty
+                              ? _name
+                              : _nameCtrl.text.trim();
+                          _email = _emailCtrl.text.trim().isEmpty
+                              ? _email
+                              : _emailCtrl.text.trim();
+                          _phone = _phoneCtrl.text.trim().isEmpty
+                              ? _phone
+                              : _phoneCtrl.text.trim();
                           _city = tempCity ?? _city;
                         });
-                        
+
                         // Save locally
                         final prefs = await SharedPreferences.getInstance();
                         await prefs.setString('userName', _name);
                         await prefs.setString('userEmail', _email);
                         await prefs.setString('userPhone', _phone);
-                        if (_city != null) await prefs.setString('userCity', _city!);
-                        
+                        if (_city != null) {
+                          await prefs.setString('userCity', _city!);
+                        }
+
                         // Save to Firestore
                         if (user != null) {
                           try {
-                            await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
-                              'name': _name,
-                              'email': _email,
-                              'phone': _phone,
-                              'city': _city,
-                            });
+                            await FirebaseFirestore.instance
+                                .collection('users')
+                                .doc(user.uid)
+                                .update({
+                                  'name': _name,
+                                  'email': _email,
+                                  'phone': _phone,
+                                  'city': _city,
+                                });
                           } catch (e) {
                             debugPrint('Failed to update Firestore: $e');
                           }
                         }
-                        
-                         if (!mounted) return;
-                         nav.pop();
-                         messenger.showSnackBar(
-                           SnackBar(
-                             content: Text(
-                               'Profile updated successfully!',
-                               style: GoogleFonts.poppins(fontSize: 13),
-                             ),
-                             backgroundColor: const Color(0xFF2E7D32),
-                             behavior: SnackBarBehavior.floating,
-                             shape: RoundedRectangleBorder(
-                               borderRadius: BorderRadius.circular(10),
-                             ),
-                           ),
-                         );
-                   },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: AppColors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
+
+                        if (!mounted) return;
+                        nav.pop();
+                        messenger.showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Profile updated successfully!',
+                              style: GoogleFonts.poppins(fontSize: 13),
+                            ),
+                            backgroundColor: const Color(0xFF2E7D32),
+                            behavior: SnackBarBehavior.floating,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: AppColors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: Text(
+                        'Save Changes',
+                        style: GoogleFonts.poppins(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ),
-                    elevation: 0,
                   ),
-                  child: Text(
-                    'Save Changes',
-                    style: GoogleFonts.poppins(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
+                ],
               ),
-            ],
-          ),
-        ),
-      );
+            ),
+          );
         },
       ),
     );
@@ -606,7 +632,10 @@ class _ProfilePageState extends State<ProfilePage> {
       style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textDark),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
+        labelStyle: GoogleFonts.poppins(
+          fontSize: 13,
+          color: AppColors.textGrey,
+        ),
         prefixIcon: Icon(icon, size: 20, color: AppColors.primary),
         filled: true,
         fillColor: AppColors.background,
@@ -635,9 +664,7 @@ class _ProfilePageState extends State<ProfilePage> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         contentPadding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -702,12 +729,16 @@ class _ProfilePageState extends State<ProfilePage> {
               12.widthBox,
               Expanded(
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    // Clear local user data
-                    SharedPreferences.getInstance().then((prefs) => prefs.clear());
-                    // Sign out — AuthGate will automatically redirect to LoginPage
-                    FirebaseAuth.instance.signOut();
+                  onPressed: () async {
+                    final navigator = Navigator.of(context);
+                    navigator.pop();
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.clear();
+                    // Reveal AuthGate's public home, including from a pushed profile.
+                    await FirebaseAuth.instance.signOut();
+                    if (navigator.mounted) {
+                      navigator.popUntil((route) => route.isFirst);
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,

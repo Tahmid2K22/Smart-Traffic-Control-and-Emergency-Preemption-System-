@@ -25,12 +25,12 @@ class RequestService {
   }) async {
     if (!supabaseReady) return;
     await sb.from(SupabaseTables.drivers).upsert({
-      'firebase_uid':   firebaseUid,
-      'name':           name,
-      'phone':          phone,
-      'vehicle_type':   vehicleType,
+      'firebase_uid': firebaseUid,
+      'name': name,
+      'phone': phone,
+      'vehicle_type': vehicleType,
       'vehicle_number': vehicleNumber,
-      'is_approved':    isApproved,
+      'is_approved': isApproved,
     }, onConflict: 'firebase_uid');
   }
 
@@ -68,11 +68,14 @@ class RequestService {
     String? currentRequestId,
   }) async {
     if (!supabaseReady) return;
-    await sb.from(SupabaseTables.drivers).update({
-      'current_lat':  lat,
-      'current_lng':  lng,
-      'updated_at':   DateTime.now().toIso8601String(),
-    }).eq('id', driverId);
+    await sb
+        .from(SupabaseTables.drivers)
+        .update({
+          'current_lat': lat,
+          'current_lng': lng,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', driverId);
   }
 
   // ── User request operations ─────────────────────────────────────────────────
@@ -92,22 +95,30 @@ class RequestService {
     required int estimatedFare,
     required double distanceKm,
   }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.uid != userFirebaseUid) {
+      throw StateError('Log in to your account before booking an ambulance.');
+    }
     if (!supabaseReady) throw StateError('Supabase is not initialised.');
-    final response = await sb.from(SupabaseTables.requests).insert({
-      'user_firebase_uid':    userFirebaseUid,
-      'user_name':            userName,
-      'user_phone':           userPhone,
-      'status':               'pending',
-      'ambulance_type':       ambulanceType,
-      'pickup_lat':           pickupLat,
-      'pickup_lng':           pickupLng,
-      'pickup_address':       pickupAddress,
-      'destination_lat':      destinationLat,
-      'destination_lng':      destinationLng,
-      'destination_address':  destinationAddress,
-      'estimated_fare':       estimatedFare,
-      'distance_km':          distanceKm,
-    }).select('id').single();
+    final response = await sb
+        .from(SupabaseTables.requests)
+        .insert({
+          'user_firebase_uid': userFirebaseUid,
+          'user_name': userName,
+          'user_phone': userPhone,
+          'status': 'pending',
+          'ambulance_type': ambulanceType,
+          'pickup_lat': pickupLat,
+          'pickup_lng': pickupLng,
+          'pickup_address': pickupAddress,
+          'destination_lat': destinationLat,
+          'destination_lng': destinationLng,
+          'destination_address': destinationAddress,
+          'estimated_fare': estimatedFare,
+          'distance_km': distanceKm,
+        })
+        .select('id')
+        .single();
     return response['id'] as String;
   }
 
@@ -121,15 +132,18 @@ class RequestService {
         .select('*, drivers(name, phone, current_lat, current_lng)')
         .eq('user_firebase_uid', uid)
         .order('created_at', ascending: false);
-    return (rows as List).map((r) => AmbulanceRequest.fromMap(r as Map<String, dynamic>)).toList();
+    return (rows as List)
+        .map((r) => AmbulanceRequest.fromMap(r as Map<String, dynamic>))
+        .toList();
   }
 
   /// Cancels a pending request (user side).
   static Future<void> cancelRequest(String requestId) async {
     if (!supabaseReady) return;
-    await sb.from(SupabaseTables.requests).update({
-      'status': RequestStatus.cancelled.toDbString(),
-    }).eq('id', requestId);
+    await sb
+        .from(SupabaseTables.requests)
+        .update({'status': RequestStatus.cancelled.toDbString()})
+        .eq('id', requestId);
   }
 
   // ── Driver accept / reject / complete ───────────────────────────────────────
@@ -140,23 +154,28 @@ class RequestService {
     required String driverId,
   }) async {
     if (!supabaseReady) return;
-    await sb.from(SupabaseTables.requests).update({
-      'driver_id':    driverId,
-      'status':       RequestStatus.accepted.toDbString(),
-      'accepted_at':  DateTime.now().toIso8601String(),
-    }).eq('id', requestId);
+    await sb
+        .from(SupabaseTables.requests)
+        .update({
+          'driver_id': driverId,
+          'status': RequestStatus.accepted.toDbString(),
+          'accepted_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', requestId);
 
-    await sb.from(SupabaseTables.drivers).update({
-      'current_request_id': requestId,
-    }).eq('id', driverId);
+    await sb
+        .from(SupabaseTables.drivers)
+        .update({'current_request_id': requestId})
+        .eq('id', driverId);
   }
 
   /// Driver marks themselves as arrived at pickup.
   static Future<void> markArrived(String requestId) async {
     if (!supabaseReady) return;
-    await sb.from(SupabaseTables.requests).update({
-      'status': RequestStatus.arrived.toDbString(),
-    }).eq('id', requestId);
+    await sb
+        .from(SupabaseTables.requests)
+        .update({'status': RequestStatus.arrived.toDbString()})
+        .eq('id', requestId);
   }
 
   /// Driver marks the trip as completed.
@@ -165,14 +184,18 @@ class RequestService {
     required String driverId,
   }) async {
     if (!supabaseReady) return;
-    await sb.from(SupabaseTables.requests).update({
-      'status':       RequestStatus.completed.toDbString(),
-      'completed_at': DateTime.now().toIso8601String(),
-    }).eq('id', requestId);
+    await sb
+        .from(SupabaseTables.requests)
+        .update({
+          'status': RequestStatus.completed.toDbString(),
+          'completed_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', requestId);
 
-    await sb.from(SupabaseTables.drivers).update({
-      'current_request_id': null,
-    }).eq('id', driverId);
+    await sb
+        .from(SupabaseTables.drivers)
+        .update({'current_request_id': null})
+        .eq('id', driverId);
   }
 
   // ── Real-time streams ───────────────────────────────────────────────────────
@@ -195,7 +218,9 @@ class RequestService {
         .from(SupabaseTables.requests)
         .stream(primaryKey: ['id'])
         .eq('id', requestId)
-        .map((rows) => rows.isEmpty ? null : AmbulanceRequest.fromMap(rows.first));
+        .map(
+          (rows) => rows.isEmpty ? null : AmbulanceRequest.fromMap(rows.first),
+        );
   }
 
   /// Stream of the driver's own active requests.
@@ -207,7 +232,9 @@ class RequestService {
         .eq('driver_id', driverId)
         .inFilter('status', ['accepted', 'en_route', 'arrived'])
         .order('accepted_at', ascending: false)
-        .map((rows) => rows.isEmpty ? null : AmbulanceRequest.fromMap(rows.first));
+        .map(
+          (rows) => rows.isEmpty ? null : AmbulanceRequest.fromMap(rows.first),
+        );
   }
 
   // ── Chat / messaging ────────────────────────────────────────────────────────
@@ -221,10 +248,10 @@ class RequestService {
   }) async {
     if (!supabaseReady) return;
     await sb.from(SupabaseTables.messages).insert({
-      'request_id':  requestId,
+      'request_id': requestId,
       'sender_role': senderRole.toDbString(),
       'sender_name': senderName,
-      'body':        body,
+      'body': body,
     });
     // Update last_message_at on the request for unread badge support
     await sb
@@ -252,6 +279,8 @@ class RequestService {
         .select()
         .eq('request_id', requestId)
         .order('created_at', ascending: true);
-    return (rows as List).map((r) => ChatMessage.fromMap(r as Map<String, dynamic>)).toList();
+    return (rows as List)
+        .map((r) => ChatMessage.fromMap(r as Map<String, dynamic>))
+        .toList();
   }
 }

@@ -677,9 +677,16 @@ class _TripPlanningSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          const Text('Recent locations', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-          _RecentLocation(title: 'Square Hospital', subtitle: '18/F, Panthapath, Dhaka', onTap: () => onRecentSelected('Square Hospital, Panthapath, Dhaka')),
-          _RecentLocation(title: 'Dhaka Medical College', subtitle: 'Secretariat Road, Dhaka', onTap: () => onRecentSelected('Dhaka Medical College Hospital, Dhaka')),
+          const Text(
+            'Select Hospital Destination',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textDark,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _ApprovedHospitalList(onSelected: onHospitalSelected),
           const SizedBox(height: 12),
           const Text(
             'Choose ambulance type',
@@ -915,15 +922,6 @@ class _QuickAction extends StatelessWidget {
       ),
     ),
   );
-}
-
-class _RecentLocation extends StatelessWidget {
-  const _RecentLocation({required this.title, required this.subtitle, required this.onTap});
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-  @override
-  Widget build(BuildContext context) => ListTile(onTap: onTap, contentPadding: EdgeInsets.zero, dense: true, leading: const Icon(Icons.history_rounded, color: AppColors.textLight), title: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)), subtitle: Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textGrey)), trailing: const Icon(Icons.north_west_rounded, size: 17, color: AppColors.textLight));
 }
 
 class _TierCard extends StatelessWidget {

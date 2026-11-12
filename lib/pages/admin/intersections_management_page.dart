@@ -42,11 +42,11 @@ class _IntersectionsManagementPageState
       _seedError = null;
     });
     try {
-      await _service.seedKhulnaIntersection();
+      await _service.seedKhulnaIntersections();
     } catch (error) {
       if (mounted) {
         setState(() {
-          _seedError = 'Could not initialize the Khulna intersection: $error';
+          _seedError = 'Could not initialize the Khulna intersections: $error';
         });
       }
     } finally {
@@ -121,7 +121,7 @@ class _IntersectionsManagementPageState
               const LinearProgressIndicator(),
               const Padding(
                 padding: EdgeInsets.all(8),
-                child: Text('Initializing the Khulna intersection…'),
+                child: Text('Initializing the Khulna intersections…'),
               ),
             ],
             if (_seedError != null)
@@ -244,6 +244,19 @@ class _IntersectionsManagementPageState
                                 'Longitude: ${point.longitude}',
                               ),
                               const SizedBox(height: 8),
+                              Text(
+                                '${point.wayCount}-way / '
+                                '${point.trafficLightCount} traffic lights',
+                              ),
+                              _IntersectionDiagram(intersection: point),
+                              const Text(
+                                'Directory configuration only; no live signal data.',
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
                               Row(
                                 children: [
                                   Semantics(
@@ -285,6 +298,87 @@ class _IntersectionsManagementPageState
                   );
                 },
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _IntersectionDiagram extends StatelessWidget {
+  const _IntersectionDiagram({required this.intersection});
+
+  final IntersectionPoint intersection;
+
+  @override
+  Widget build(BuildContext context) {
+    final lights = intersection.lights;
+    final directions = {
+      for (final direction in IntersectionPoint.directions)
+        direction: Tooltip(
+          message: 'Light ID: ${lights[direction]!.id}',
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${direction[0].toUpperCase()}${direction.substring(1)}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const Icon(Icons.traffic, color: Colors.grey, size: 22),
+                const Text(
+                  'UNKNOWN',
+                  style: TextStyle(color: Colors.grey, fontSize: 11),
+                ),
+                if (lights[direction]!.controllerId?.trim().isNotEmpty != true)
+                  const Text(
+                    'Unconfigured',
+                    style: TextStyle(color: Colors.grey, fontSize: 11),
+                  ),
+              ],
+            ),
+          ),
+        ),
+    };
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Table(
+          defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          children: [
+            TableRow(
+              children: [
+                const SizedBox.shrink(),
+                directions['north']!,
+                const SizedBox.shrink(),
+              ],
+            ),
+            TableRow(
+              children: [
+                directions['west']!,
+                const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.add_road, color: Colors.grey, size: 32),
+                    Text(
+                      'Intersection',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 11),
+                    ),
+                  ],
+                ),
+                directions['east']!,
+              ],
+            ),
+            TableRow(
+              children: [
+                const SizedBox.shrink(),
+                directions['south']!,
+                const SizedBox.shrink(),
+              ],
             ),
           ],
         ),
@@ -390,6 +484,12 @@ class _IntersectionFormDialogState extends State<_IntersectionFormDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Text(
+                  'New intersections default to 4 ways and 4 traffic lights '
+                  '(North, East, South and West). Controller mappings are '
+                  'unconfigured; live signal states are unavailable.',
+                ),
+                const SizedBox(height: 12),
                 TextFormField(
                   controller: _name,
                   enabled: !_saving,

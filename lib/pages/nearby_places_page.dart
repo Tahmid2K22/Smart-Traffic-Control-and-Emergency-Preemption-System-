@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/colors.dart';
 import '../services/deep_link_navigation_service.dart';
@@ -8,173 +12,624 @@ import '../services/places_api_service.dart';
 
 enum NearbyPlaceType { hospitals, pharmacies }
 
+enum _LocationSettingsTarget { app, location }
+
 class NearbyPlacesPage extends StatefulWidget {
-  const NearbyPlacesPage({super.key, required this.type});
+  const NearbyPlacesPage({
+    super.key,
+    required this.type,
+    this.placesApi,
+    this.locate,
+  });
+
   final NearbyPlaceType type;
+  final PlacesApiService? placesApi;
+  final Future<Position> Function()? locate;
 
   @override
   State<NearbyPlacesPage> createState() => _NearbyPlacesPageState();
 }
 
 class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
-  static const _fallback = LatLng(23.8103, 90.4125);
-  GoogleMapController? _mapController;
-  LatLng _userLocation = _fallback;
+  late final PlacesApiService _placesApi;
+  LatLng? _userLocation;
   bool _showMap = false;
-  bool _loadingPlaces = true;
-  final _placesApi = PlacesApiService();
-  List<NearbyPlaceResult> _apiPlaces = const [];
-  bool _locationReady = false;
+  bool _loading = true;
+  List<NearbyPlaceResult> _places = const [];
+  String? _error;
+  _LocationSettingsTarget? _settingsTarget;
 
-  final _hospitals = const [
-    _Place('Dhaka Medical College Hospital', 'Secretariat Road, Dhaka', 1.2, true, Icons.local_hospital_rounded),
-    _Place('Square Hospital', 'Panthapath, Dhaka', 2.8, true, Icons.local_hospital_rounded),
-    _Place('Shaheed Suhrawardy Medical College', 'Sher-e-Bangla Nagar, Dhaka', 4.1, true, Icons.local_hospital_rounded),
-    _Place('Ad-Din Hospital', 'Moghbazar, Dhaka', 5.7, false, Icons.local_hospital_rounded),
-  ];
-  final _pharmacies = const [
-    _Place('Lazz Pharma', 'Dhanmondi 27, Dhaka', .8, true, Icons.medication_rounded),
-    _Place('Popular Pharmacy', 'Panthapath, Dhaka', 1.5, true, Icons.medication_rounded),
-    _Place('MediCare Pharmacy', 'Kalabagan, Dhaka', 2.4, false, Icons.medication_rounded),
-  ];
+  String get _facility =>
+      widget.type == NearbyPlaceType.hospitals ? 'hospitals' : 'pharmacies';
 
-  String get _title => widget.type == NearbyPlaceType.hospitals ? 'Nearby Hospitals' : 'Nearby Pharmacies';
-  double get _radiusKm => widget.type == NearbyPlaceType.hospitals ? 15 : 5;
+  String get _title => widget.type == NearbyPlaceType.hospitals
+      ? 'Nearby Hospitals'
+      : 'Nearby Pharmacies';
 
   @override
   void initState() {
     super.initState();
-    _loadLocation();
-    _loadNearbyPlaces(_fallback);
+    _placesApi = widget.placesApi ?? PlacesApiService();
+    _scan();
   }
 
   @override
   void dispose() {
-    _placesApi.dispose();
+    // The caller retains ownership of an injected service.
+    if (widget.placesApi == null) _placesApi.dispose();
     super.dispose();
   }
 
-  Future<void> _loadLocation() async {
-    try {
-      if (!await Geolocator.isLocationServiceEnabled()) return;
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) return;
-      final position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium, distanceFilter: 100));
-      if (!mounted) return;
-      setState(() {
-        _userLocation = LatLng(position.latitude, position.longitude);
-        _locationReady = true;
-      });
-      await _loadNearbyPlaces(_userLocation);
-      await _mapController?.animateCamera(CameraUpdate.newLatLng(_userLocation));
-    } on Exception {
-      // The curated fallback list remains available when location is unavailable.
+  Future<Position> _locate() async {
+    if (!await Geolocator.isLocationServiceEnabled()) {
+      throw const LocationServiceDisabledException();
     }
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.deniedForever) {
+      throw const _LocationFailure(
+        'Location permission is permanently denied. Enable it in Settings, then retry.',
+        _LocationSettingsTarget.app,
+      );
+    }
+    if (permission != LocationPermission.whileInUse &&
+        permission != LocationPermission.always) {
+      throw const PermissionDeniedException(
+        'Allow location access to find nearby facilities.',
+      );
+    }
+    return Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 20),
+      ),
+    );
   }
 
-  Future<void> _loadNearbyPlaces(LatLng center) async {
+  Future<void> _scan() async {
+    setState(() {
+      _loading = true;
+      _places = const [];
+      _userLocation = null;
+      _error = null;
+      _settingsTarget = null;
+    });
+    var locating = true;
     try {
-      final results = await _placesApi.nearby(
+      final position = await (widget.locate ?? _locate)();
+      if (!mounted) return;
+      if (!position.latitude.isFinite ||
+          !position.longitude.isFinite ||
+          position.latitude.abs() > 90 ||
+          position.longitude.abs() > 180) {
+        throw const _LocationFailure(
+          'GPS returned an invalid location. Please retry outdoors.',
+        );
+      }
+      final center = LatLng(position.latitude, position.longitude);
+      setState(() => _userLocation = center);
+      locating = false;
+      final fetched = await _placesApi.nearby(
         center: center,
-        type: widget.type == NearbyPlaceType.hospitals ? 'hospital' : 'pharmacy',
-        radiusMeters: _radiusKm * 1000,
+        type: widget.type == NearbyPlaceType.hospitals
+            ? 'hospital'
+            : 'pharmacy',
+        radiusMeters: PlacesApiService.nearbyRadiusMeters,
       );
       if (!mounted) return;
+      double distance(NearbyPlaceResult place) => Geolocator.distanceBetween(
+        center.latitude,
+        center.longitude,
+        place.location.latitude,
+        place.location.longitude,
+      );
+      final nearby =
+          fetched
+              .where(
+                (place) =>
+                    distance(place) <= PlacesApiService.nearbyRadiusMeters,
+              )
+              .toList()
+            ..sort((a, b) => distance(a).compareTo(distance(b)));
       setState(() {
-        _apiPlaces = results.where((place) {
-          final distance = Geolocator.distanceBetween(
-            center.latitude,
-            center.longitude,
-            place.location.latitude,
-            place.location.longitude,
-          );
-          return distance <= _radiusKm * 1000;
-        }).toList();
-        _loadingPlaces = false;
+        _places = nearby;
+        _loading = false;
       });
-    } on Exception {
-      if (mounted) setState(() => _loadingPlaces = false);
+    } catch (error) {
+      if (!mounted) return;
+      String message;
+      _LocationSettingsTarget? settings;
+      if (error is _LocationFailure) {
+        message = error.message;
+        settings = error.settingsTarget;
+      } else if (error is LocationServiceDisabledException) {
+        message = 'Location services are disabled. Turn on GPS in Settings, then retry.';
+        settings = _LocationSettingsTarget.location;
+      } else if (error is PermissionDeniedException) {
+        message = 'Location permission denied. Allow location access in Settings, then retry.';
+        settings = _LocationSettingsTarget.app;
+      } else if (locating && error is TimeoutException) {
+        message = 'Could not get a fresh GPS location within 20 seconds. Please retry outdoors.';
+      } else {
+        message = locating
+            ? 'Could not get your current GPS location. Please retry.\n$error'
+            : 'Could not load nearby $_facility. Check your connection and retry.\n$error';
+      }
+      setState(() {
+        _loading = false;
+        _places = const [];
+        _error = message;
+        _settingsTarget = settings;
+      });
     }
   }
 
-  List<_Place> get _places {
-    if (_apiPlaces.isNotEmpty) {
-      return _apiPlaces.where((place) {
-        final distance = Geolocator.distanceBetween(
-          _userLocation.latitude,
-          _userLocation.longitude,
-          place.location.latitude,
-          place.location.longitude,
+  Future<void> _openSettings() async {
+    try {
+      final opened = _settingsTarget == _LocationSettingsTarget.location
+          ? await Geolocator.openLocationSettings()
+          : await Geolocator.openAppSettings();
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please open location settings manually.'),
+          ),
         );
-        return distance <= _radiusKm * 1000;
-      }).map((place) => _Place(
-            place.name,
-            place.address,
-            Geolocator.distanceBetween(_userLocation.latitude, _userLocation.longitude, place.location.latitude, place.location.longitude) / 1000,
-            place.isOpen ?? true,
-            widget.type == NearbyPlaceType.hospitals ? Icons.local_hospital_rounded : Icons.medication_rounded,
-            place.location,
-          )).toList();
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please open location settings manually.'),
+        ),
+      );
     }
-    return widget.type == NearbyPlaceType.hospitals ? _hospitals : _pharmacies;
   }
 
-  Future<void> _openDirections(_Place place) async {
-    final point = _placePoint(place);
-    final opened = await DeepLinkNavigationService.openGoogleMaps(destinationLatitude: point.latitude, destinationLongitude: point.longitude, originLatitude: _userLocation.latitude, originLongitude: _userLocation.longitude);
-    if (!opened && mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No navigation app is available.')));
+  Future<void> _openDirections(NearbyPlaceResult place) async {
+    final center = _userLocation;
+    if (center == null) return;
+    final opened = await DeepLinkNavigationService.openGoogleMaps(
+      destinationLatitude: place.location.latitude,
+      destinationLongitude: place.location.longitude,
+      originLatitude: center.latitude,
+      originLongitude: center.longitude,
+    );
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No navigation app is available.')),
+      );
+    }
   }
 
-  LatLng _placePoint(_Place place) {
-    if (place.location != null) return place.location!;
-    final index = _places.indexOf(place);
-    return LatLng(_userLocation.latitude + (index + 1) * .004, _userLocation.longitude + (index.isEven ? .003 : -.003));
+  Future<void> _callPlace(String? phone) async {
+    final number = phone?.trim();
+    if (number == null || number.isEmpty) return;
+    if (!await launchUrl(Uri(scheme: 'tel', path: number)) && mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not dial $number')));
+    }
   }
 
-  Set<Marker> _markers() => _places.asMap().entries.map((entry) {
-        final place = entry.value;
-        return Marker(markerId: MarkerId('place-${entry.key}'), position: _placePoint(place), infoWindow: InfoWindow(title: place.name), icon: BitmapDescriptor.defaultMarkerWithHue(widget.type == NearbyPlaceType.hospitals ? BitmapDescriptor.hueRed : BitmapDescriptor.hueOrange));
-      }).toSet();
+  Widget _scanButton() => OutlinedButton.icon(
+    onPressed: _loading ? null : _scan,
+    icon: const Icon(Icons.refresh_rounded, size: 18),
+    label: Text(
+      _loading
+          ? 'Scanning...'
+          : _error != null
+          ? 'Retry scan'
+          : 'Scan again',
+    ),
+  );
+
+  String get _summary => _loading
+      ? _userLocation == null
+            ? 'Getting your current GPS location...'
+            : 'Searching within 15 km...'
+      : _error != null
+      ? 'Scan unsuccessful'
+      : '${_places.length} facilities found nearby';
+
+  Widget _scanStatus() => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (_loading) ...[
+        const LinearProgressIndicator(color: AppColors.primary),
+        const SizedBox(height: 12),
+        Text(_summary, textAlign: TextAlign.center),
+      ] else if (_error != null) ...[
+        const Icon(
+          Icons.error_outline_rounded,
+          color: AppColors.warning,
+          size: 36,
+        ),
+        const SizedBox(height: 8),
+        Text(_error!, textAlign: TextAlign.center),
+        if (_settingsTarget != null)
+          TextButton.icon(
+            onPressed: _openSettings,
+            icon: const Icon(Icons.settings_rounded),
+            label: const Text('Settings'),
+          ),
+      ] else if (_places.isEmpty) ...[
+        Icon(
+          widget.type == NearbyPlaceType.hospitals
+              ? Icons.local_hospital_outlined
+              : Icons.medication_outlined,
+          size: 42,
+          color: AppColors.textLight,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          'No $_facility found within 15 km',
+          textAlign: TextAlign.center,
+          style: GoogleFonts.poppins(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'No facilities were returned for your current location. You can scan again.',
+          textAlign: TextAlign.center,
+        ),
+      ],
+      const SizedBox(height: 12),
+      _scanButton(),
+    ],
+  );
+
+  Widget _map(LatLng center) => Stack(
+    children: [
+      GoogleMap(
+        initialCameraPosition: CameraPosition(target: center, zoom: 11),
+        markers: _places
+            .map(
+              (place) => Marker(
+                markerId: MarkerId(place.id),
+                position: place.location,
+                infoWindow: InfoWindow(
+                  title: place.name,
+                  snippet: place.address,
+                  onTap: () => _openDirections(place),
+                ),
+                icon: BitmapDescriptor.defaultMarkerWithHue(
+                  widget.type == NearbyPlaceType.hospitals
+                      ? BitmapDescriptor.hueRed
+                      : BitmapDescriptor.hueOrange,
+                ),
+              ),
+            )
+            .toSet(),
+        circles: {
+          Circle(
+            circleId: const CircleId('nearby-radius'),
+            center: center,
+            radius: PlacesApiService.nearbyRadiusMeters,
+            strokeWidth: 2,
+            strokeColor: AppColors.primary,
+            fillColor: AppColors.primary.withValues(alpha: 0.08),
+          ),
+        },
+        myLocationEnabled: true,
+        myLocationButtonEnabled: true,
+        zoomControlsEnabled: false,
+      ),
+      Positioned(
+        top: 12,
+        left: 16,
+        right: 16,
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('$_title • 15 km'),
+                if (!_loading && _error == null && _places.isNotEmpty)
+                  Text(_summary),
+                _scanStatus(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
+    final center = _userLocation;
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(title: Text('$_title within ${_radiusKm.toStringAsFixed(0)} km'), backgroundColor: Colors.transparent, elevation: 0, actions: [IconButton(tooltip: _showMap ? 'Show list' : 'Show map', onPressed: () => setState(() => _showMap = !_showMap), icon: Icon(_showMap ? Icons.view_list_rounded : Icons.map_rounded))]),
-      body: _showMap ? GoogleMap(initialCameraPosition: CameraPosition(target: _userLocation, zoom: 13.8), onMapCreated: (controller) => _mapController = controller, markers: _markers(), myLocationEnabled: _locationReady, myLocationButtonEnabled: _locationReady, zoomControlsEnabled: false) : ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 24), children: [_Header(type: widget.type), if (_loadingPlaces) const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator(color: AppColors.primary, minHeight: 2)), const SizedBox(height: 16), ..._places.map((place) => Padding(padding: const EdgeInsets.only(bottom: 12), child: _PlaceCard(place: place, onDirections: () => _openDirections(place))))]),
+      appBar: AppBar(
+        title: Text(
+          '$_title (15 km)',
+          style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 18),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: _showMap ? 'Show list' : 'Show map',
+            onPressed: () => setState(() => _showMap = !_showMap),
+            icon: Icon(_showMap ? Icons.view_list_rounded : Icons.map_rounded),
+          ),
+        ],
+      ),
+      body: _showMap && center != null
+          ? _map(center)
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+              children: [
+                _Header(type: widget.type, summary: _summary),
+                const SizedBox(height: 16),
+                _scanStatus(),
+                const SizedBox(height: 16),
+                if (center != null)
+                  ..._places.map(
+                    (place) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _PlaceCard(
+                        place: place,
+                        distanceKm:
+                            Geolocator.distanceBetween(
+                              center.latitude,
+                              center.longitude,
+                              place.location.latitude,
+                              place.location.longitude,
+                            ) /
+                            1000,
+                        onDirections: () => _openDirections(place),
+                        onCall: place.phone?.trim().isNotEmpty == true
+                            ? () => _callPlace(place.phone)
+                            : null,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 }
 
+class _LocationFailure implements Exception {
+  const _LocationFailure(this.message, [this.settingsTarget]);
+
+  final String message;
+  final _LocationSettingsTarget? settingsTarget;
+}
+
 class _Header extends StatelessWidget {
-  const _Header({required this.type});
+  const _Header({required this.type, required this.summary});
+
   final NearbyPlaceType type;
+  final String summary;
+
   @override
-  Widget build(BuildContext context) => Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(color: AppColors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.cardBorder)), child: Row(children: [CircleAvatar(backgroundColor: AppColors.primaryLight, foregroundColor: AppColors.primary, child: Icon(type == NearbyPlaceType.hospitals ? Icons.local_hospital_rounded : Icons.medication_rounded)), const SizedBox(width: 12), Expanded(child: Text(type == NearbyPlaceType.hospitals ? 'Emergency-ready hospitals near you' : 'Open pharmacies near you', style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textDark)))]));
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: AppColors.white,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: AppColors.cardBorder),
+    ),
+    child: Row(
+      children: [
+        CircleAvatar(
+          radius: 22,
+          backgroundColor: AppColors.primaryLight,
+          foregroundColor: AppColors.primary,
+          child: Icon(
+            type == NearbyPlaceType.hospitals
+                ? Icons.local_hospital_rounded
+                : Icons.medication_rounded,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                type == NearbyPlaceType.hospitals
+                    ? 'Hospitals within 15 km'
+                    : 'Pharmacies within 15 km',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                summary,
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: AppColors.textGrey,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _PlaceCard extends StatelessWidget {
-  const _PlaceCard({required this.place, required this.onDirections});
-  final _Place place;
+  const _PlaceCard({
+    required this.place,
+    required this.distanceKm,
+    required this.onDirections,
+    required this.onCall,
+  });
+
+  final NearbyPlaceResult place;
+  final double distanceKm;
   final VoidCallback onDirections;
+  final VoidCallback? onCall;
+
   @override
-  Widget build(BuildContext context) => Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: AppColors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.cardBorder)), child: Row(children: [Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: AppColors.primaryLight, borderRadius: BorderRadius.circular(12)), child: Icon(place.icon, color: AppColors.primary)), const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(place.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textDark)), const SizedBox(height: 4), Text(place.address, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: AppColors.textGrey)), const SizedBox(height: 7), Row(children: [Text('${place.distanceKm.toStringAsFixed(1)} km', style: const TextStyle(fontSize: 12, color: AppColors.textGrey)), const SizedBox(width: 8), _StatusChip(isOpen: place.isOpen)])])), const SizedBox(width: 8), IconButton(tooltip: 'Open directions', onPressed: onDirections, icon: const Icon(Icons.directions_rounded, color: AppColors.primary))]));
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: AppColors.white,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: AppColors.cardBorder),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 10,
+          offset: const Offset(0, 3),
+        ),
+      ],
+    ),
+    child: Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.primaryLight,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Icon(
+            place.types.contains('hospital')
+                ? Icons.local_hospital_rounded
+                : Icons.medication_rounded,
+            color: AppColors.primary,
+            size: 26,
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                place.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                place.address,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.poppins(
+                  fontSize: 12,
+                  color: AppColors.textGrey,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '${distanceKm.toStringAsFixed(1)} km away',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ),
+                  _StatusChip(isOpen: place.isOpen),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Directions',
+              onPressed: onDirections,
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.directions_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ),
+            ),
+            if (onCall != null)
+              IconButton(
+                tooltip: 'Call facility',
+                onPressed: onCall,
+                icon: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.successLight,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.call_rounded,
+                    color: AppColors.success,
+                    size: 18,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    ),
+  );
 }
 
 class _StatusChip extends StatelessWidget {
   const _StatusChip({required this.isOpen});
-  final bool isOpen;
-  @override
-  Widget build(BuildContext context) => Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: isOpen ? AppColors.successLight : AppColors.warningLight, borderRadius: BorderRadius.circular(10)), child: Text(isOpen ? 'Open' : 'Closed', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: isOpen ? AppColors.success : AppColors.warning)));
-}
+  final bool? isOpen;
 
-class _Place {
-  const _Place(this.name, this.address, this.distanceKm, this.isOpen, this.icon, [this.location]);
-  final String name;
-  final String address;
-  final double distanceKm;
-  final bool isOpen;
-  final IconData icon;
-  final LatLng? location;
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: isOpen == null
+          ? AppColors.background
+          : isOpen!
+          ? AppColors.successLight
+          : AppColors.warningLight,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Text(
+      isOpen == null
+          ? 'Hours unavailable'
+          : isOpen!
+          ? 'Open now'
+          : 'Closed',
+      style: TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+        color: isOpen == null
+            ? AppColors.textGrey
+            : isOpen!
+            ? AppColors.success
+            : AppColors.warning,
+      ),
+    ),
+  );
 }

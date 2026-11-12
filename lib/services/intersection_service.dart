@@ -30,21 +30,56 @@ class IntersectionService {
     return uid;
   }
 
-  Future<void> seedKhulnaIntersection() async {
+  Future<void> seedKhulnaIntersection() => seedKhulnaIntersections();
+
+  Future<void> seedKhulnaIntersections() async {
     final uid = await _requireAdmin();
-    final ref = _firestore
-        .collection('intersections')
-        .doc(IntersectionPoint.khulna.id);
-    await _firestore.runTransaction((transaction) async {
-      if ((await transaction.get(ref)).exists) return;
-      transaction.set(ref, {
-        ...IntersectionPoint.khulna.toMap(),
-        'fullPlusCode': '7MJFVGX3+G39',
-        'createdBy': uid,
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
+    for (final point in IntersectionPoint.khulnaIntersections) {
+      final ref = _firestore.collection('intersections').doc(point.id);
+      await _firestore.runTransaction((transaction) async {
+        final existing = await transaction.get(ref);
+        if (!existing.exists) {
+          transaction.set(ref, {
+            ...point.toMap(),
+            'fullPlusCode': '7MJF${point.plusCode}',
+            'location': GeoPoint(point.latitude, point.longitude),
+            'createdBy': uid,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          return;
+        }
+        final patch = _layoutPatch(point.id, existing.data()!);
+        if (patch.isNotEmpty) {
+          transaction.set(ref, {
+            ...patch,
+            'updatedBy': uid,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
       });
-    });
+    }
+  }
+
+  Map<String, dynamic> _layoutPatch(String id, Map<String, dynamic> data) {
+    final defaults = IntersectionPoint(
+      id: id,
+      name: '',
+      city: '',
+      latitude: 0,
+      longitude: 0,
+    ).lights;
+    final existing = data['trafficLights'];
+    final missing = {
+      for (final direction in IntersectionPoint.directions)
+        if (existing is! Map || !existing.containsKey(direction))
+          direction: defaults[direction]!.toMap(),
+    };
+    return {
+      if (data['wayCount'] != 4) 'wayCount': 4,
+      if (data['trafficLightCount'] != 4) 'trafficLightCount': 4,
+      if (missing.isNotEmpty) 'trafficLights': missing,
+    };
   }
 
   Future<void> saveIntersection({
@@ -75,12 +110,22 @@ class IntersectionService {
     if (id == null) {
       await ref.set({
         ...data,
+        ..._layoutPatch(ref.id, const {}),
         'isActive': true,
         'createdBy': uid,
         'createdAt': FieldValue.serverTimestamp(),
       });
     } else {
-      await ref.update(data);
+      await _firestore.runTransaction((transaction) async {
+        final existing = await transaction.get(ref);
+        if (!existing.exists) {
+          throw StateError('This intersection no longer exists.');
+        }
+        transaction.set(ref, {
+          ...data,
+          ..._layoutPatch(ref.id, existing.data()!),
+        }, SetOptions(merge: true));
+      });
     }
   }
 

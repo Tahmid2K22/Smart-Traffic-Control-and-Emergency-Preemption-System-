@@ -186,7 +186,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // bottom nav bar — 5 tabs
+  // bottom nav bar â€” 5 tabs
   Widget _buildBottomNav() {
     return Container(
       decoration: BoxDecoration(
@@ -365,7 +365,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                       children: [
                         Text('Traffic Light Control',
                             style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
-                        Text('Traffic Police Only � Passcode Protected',
+                        Text('Traffic Police Only • Passcode Protected',
                             style: GoogleFonts.poppins(fontSize: 12, color: Color(0xCCFFFFFF))),
                       ],
                     ),
@@ -654,7 +654,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
   }
 }
 
-// ── Pending Driver Tile (overview) ─────────────────────────────────────────────
+// â”€â”€ Pending Driver Tile (overview) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class _PendingDriverTile extends StatefulWidget {
   final String uid;
@@ -692,8 +692,8 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
   @override
   Widget build(BuildContext context) {
     final String name = widget.data['name'] ?? 'Unknown';
-    final String city = widget.data['city'] ?? '–';
-    final String vehicleType = widget.data['vehicleType'] ?? '–';
+    final String city = widget.data['city'] ?? 'â€“';
+    final String vehicleType = widget.data['vehicleType'] ?? 'â€“';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -736,7 +736,7 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
                   ),
                 ),
                 Text(
-                  '$vehicleType • $city',
+                  '$vehicleType â€¢ $city',
                   style: GoogleFonts.poppins(
                     fontSize: 12,
                     color: AppColors.textGrey,
@@ -793,7 +793,7 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
   }
 }
 
-// ── Pending Hospital Tile (overview) ──────────────────────────────────────────
+// â”€â”€ Pending Hospital Tile (overview) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class _PendingHospitalTile extends StatefulWidget {
   final String id;
@@ -831,7 +831,7 @@ class _PendingHospitalTileState extends State<_PendingHospitalTile> {
   @override
   Widget build(BuildContext context) {
     final String name = widget.data['name'] as String? ?? 'Unknown';
-    final String city = widget.data['city'] as String? ?? '–';
+    final String city = widget.data['city'] as String? ?? 'â€“';
     final int beds = (widget.data['beds'] as num?)?.toInt() ?? 0;
 
     return Container(
@@ -877,7 +877,7 @@ class _PendingHospitalTileState extends State<_PendingHospitalTile> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  '$city  •  $beds beds',
+                  '$city  â€¢  $beds beds',
                   style: GoogleFonts.poppins(
                     fontSize: 12,
                     color: AppColors.textGrey,

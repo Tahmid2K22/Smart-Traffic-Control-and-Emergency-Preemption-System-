@@ -422,6 +422,11 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
             intersection.city,
             style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
           ),
+          Text(
+            '${intersection.wayCount}-way / '
+            '${intersection.trafficLightCount} traffic lights',
+            style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey),
+          ),
           if (plusCode.isNotEmpty)
             Text(
               'Plus Code: $plusCode',
