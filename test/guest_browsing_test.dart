@@ -4,7 +4,6 @@ import 'package:e_ambulance/pages/home_page.dart';
 import 'package:e_ambulance/pages/login_page.dart';
 import 'package:e_ambulance/pages/nearby_places_page.dart';
 import 'package:e_ambulance/pages/notifications_page.dart';
-import 'package:e_ambulance/pages/profile_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -49,32 +48,45 @@ void main() {
   });
 
   for (final service in ['Pharmacy', 'Hospitals']) {
-    testWidgets('$service access requires login for guests', (tester) async {
+    testWidgets('$service is available without login for guests', (
+      tester,
+    ) async {
       await openGuestHome(tester);
       await tester.ensureVisible(find.text(service));
       await tester.tap(find.text(service));
-      await tester.pumpAndSettle();
-      expect(find.byType(LoginPage), findsOneWidget);
-      expect(find.byType(NearbyPlacesPage), findsNothing);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byType(NearbyPlacesPage), findsOneWidget);
+      expect(find.byType(LoginPage), findsNothing);
     });
   }
 
-  for (final icon in [Icons.receipt_long_rounded, Icons.person_rounded]) {
-    testWidgets('protected tab $icon requires login', (tester) async {
-      await openGuestHome(tester);
-      await tester.tap(
+  testWidgets('activity and profile tabs are hidden for guests', (
+    tester,
+  ) async {
+    await openGuestHome(tester);
+    for (final icon in [Icons.receipt_long_rounded, Icons.person_rounded]) {
+      expect(
         find.byWidgetPredicate(
           (widget) => widget is GButton && widget.icon == icon,
         ),
+        findsNothing,
       );
-      await tester.pumpAndSettle();
-      expect(find.byType(LoginPage), findsOneWidget);
-      expect(find.byType(ProfilePage), findsNothing);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      expect(find.text('Hello, Guest!'), findsOneWidget);
-    });
-  }
+    }
+    // Only Home and Login buttons exist in bottom nav for guests
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is GButton && widget.icon == Icons.home_rounded,
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is GButton && widget.icon == Icons.login_rounded,
+      ),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('guest notifications open login, not account data', (
     tester,

@@ -6,6 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,6 +14,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../constants/colors.dart';
 import '../models/models.dart';
 import '../services/map_search_service.dart';
+import '../services/places_api_service.dart';
 import '../services/request_service.dart';
 import '../services/hospital_service.dart';
 import 'tracking_page.dart';
@@ -36,8 +38,14 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   final _destinationFocus = FocusNode();
   Geocoding? _geocoder;
   final _mapSearchService = MapSearchService();
+  final _placesApi = PlacesApiService();
+  final _hospitalService = HospitalService();
   Timer? _autocompleteTimer;
-  List<MapSearchSuggestion> _destinationSuggestions = const [];
+  int _autocompleteRequestId = 0;
+  StreamSubscription<QuerySnapshot>? _hospitalSubscription;
+  List<PlaceSuggestion> _destinationSuggestions = const [];
+  List<String> _recentSearches = const [];
+  List<HospitalModel> _approvedHospitals = const [];
   GoogleMapController? _mapController;
   Set<Polyline> _routePolylines = const {};
   LatLng? _pickup;
@@ -88,7 +96,45 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   @override
   void initState() {
     super.initState();
+    _loadRecentSearches();
+    _hospitalSubscription = _hospitalService.approvedHospitalsStream().listen(
+      (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _approvedHospitals = snapshot.docs
+              .map(HospitalModel.fromDoc)
+              .where((hospital) => hospital.lat != 0 && hospital.lon != 0)
+              .toList();
+        });
+      },
+      onError: (_) {
+        if (mounted) setState(() => _approvedHospitals = const []);
+      },
+    );
     _loadCurrentLocation();
+  }
+
+  Future<void> _loadRecentSearches() async {
+    final preferences = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _recentSearches =
+          preferences.getStringList('recent_destination_searches') ?? const [];
+    });
+  }
+
+  Future<void> _rememberSearch(String value) async {
+    final query = value.trim();
+    if (query.isEmpty) return;
+    final preferences = await SharedPreferences.getInstance();
+    final searches = [
+      query,
+      ..._recentSearches.where(
+        (item) => item.toLowerCase() != query.toLowerCase(),
+      ),
+    ].take(5).toList();
+    await preferences.setStringList('recent_destination_searches', searches);
+    if (mounted) setState(() => _recentSearches = searches);
   }
 
   @override
@@ -97,6 +143,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     _destinationController.dispose();
     _destinationFocus.dispose();
     _autocompleteTimer?.cancel();
+    _hospitalSubscription?.cancel();
+    _placesApi.dispose();
     _mapSearchService.dispose();
     super.dispose();
   }
@@ -184,6 +232,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
         _mapCenter = point;
       });
       await _mapController?.animateCamera(CameraUpdate.newLatLng(point));
+      if (!isPickup) await _rememberSearch(value);
       await _optimizeRoute();
     } on Exception {
       if (mounted) {
@@ -196,38 +245,79 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
 
   void _onDestinationChanged(String value) {
     _autocompleteTimer?.cancel();
-    if (value.trim().length < 2) {
+    final requestId = ++_autocompleteRequestId;
+    final query = value.trim();
+    if (query.isEmpty) {
       setState(() => _destinationSuggestions = const []);
       return;
     }
-    _autocompleteTimer = Timer(const Duration(milliseconds: 400), () async {
+    _autocompleteTimer = Timer(const Duration(milliseconds: 150), () async {
+      final requestText = query;
       if (!mounted) return;
       setState(() => _isSearching = true);
       try {
-        final suggestions = await _mapSearchService.search(value);
-        if (mounted && _destinationController.text == value) {
+        final suggestions = await _placesApi.autocomplete(
+          input: requestText,
+          bias: _mapCenter,
+        );
+        if (mounted &&
+            requestId == _autocompleteRequestId &&
+            _destinationController.text.trim() == requestText) {
           setState(() => _destinationSuggestions = suggestions);
         }
       } on Exception {
-        if (mounted) setState(() => _destinationSuggestions = const []);
+        try {
+          final fallback = await _mapSearchService.search(requestText);
+          if (mounted &&
+              requestId == _autocompleteRequestId &&
+              _destinationController.text.trim() == requestText) {
+            setState(() {
+              _destinationSuggestions = fallback
+                  .map(
+                    (item) => PlaceSuggestion(
+                      placeId: '',
+                      description: item.displayName,
+                    ),
+                  )
+                  .toList();
+            });
+          }
+        } on Exception {
+          if (mounted) setState(() => _destinationSuggestions = const []);
+        }
       } finally {
-        if (mounted) setState(() => _isSearching = false);
+        if (mounted && requestId == _autocompleteRequestId) {
+          setState(() => _isSearching = false);
+        }
       }
     });
   }
 
-  Future<void> _selectDestinationSuggestion(
-    MapSearchSuggestion suggestion,
-  ) async {
+  Future<void> _selectDestinationSuggestion(PlaceSuggestion suggestion) async {
+    LatLng? location;
+    if (suggestion.placeId.isNotEmpty) {
+      try {
+        final place = await _placesApi.getPlace(suggestion.placeId);
+        location = place?.location;
+      } on Exception {
+        location = null;
+      }
+    }
+    if (location == null) {
+      await _geocode(suggestion.description, isPickup: false);
+      return;
+    }
+    final selectedLocation = location;
     setState(() {
-      _destination = suggestion.location;
-      _mapCenter = suggestion.location;
-      _destinationController.text = suggestion.displayName;
+      _destination = selectedLocation;
+      _mapCenter = selectedLocation;
+      _destinationController.text = suggestion.description;
       _destinationSuggestions = const [];
     });
+    await _rememberSearch(suggestion.description);
     _destinationFocus.unfocus();
     await _mapController?.animateCamera(
-      CameraUpdate.newLatLng(suggestion.location),
+      CameraUpdate.newLatLng(selectedLocation),
     );
     await _optimizeRoute();
   }
@@ -369,11 +459,21 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
           builder: (_) => TrackingPage(requestId: requestId, isDriver: false),
         ),
       );
-    } catch (e) {
+    } catch (error) {
       if (!mounted) return;
       Navigator.of(context).pop(); // dismiss loading
-      _showMessage('Failed to book ambulance. Try again.');
+      _showMessage(_bookingErrorMessage(error));
     }
+  }
+
+  String _bookingErrorMessage(Object error) {
+    final message = error.toString().replaceFirst('Exception: ', '').trim();
+    if (message.contains('Supabase is not initialised')) {
+      return 'Booking is unavailable because the dispatch server is not configured.';
+    }
+    return message.isEmpty
+        ? 'Booking failed. Please try again.'
+        : 'Booking failed: $message';
   }
 
   void _showMessage(String message) {
@@ -389,6 +489,23 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
 
   Set<Marker> _markers() {
     final markers = <Marker>{};
+    for (final hospital in _approvedHospitals) {
+      final isClinic = _isClinic(hospital);
+      markers.add(
+        Marker(
+          markerId: MarkerId('facility-${hospital.id}'),
+          position: LatLng(hospital.lat, hospital.lon),
+          infoWindow: InfoWindow(
+            title: hospital.name,
+            snippet: isClinic ? 'Clinic' : 'Medical hospital',
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            isClinic ? BitmapDescriptor.hueOrange : BitmapDescriptor.hueGreen,
+          ),
+          onTap: () => _selectHospital(hospital),
+        ),
+      );
+    }
     if (_pickup != null) {
       markers.add(
         Marker(
@@ -413,6 +530,28 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       );
     }
     return markers;
+  }
+
+  bool _isClinic(HospitalModel hospital) {
+    final text =
+        '${hospital.name} ${hospital.address} ${hospital.services.join(' ')}'
+            .toLowerCase();
+    return text.contains('clinic') ||
+        text.contains('diagnostic') ||
+        text.contains('medical centre') ||
+        text.contains('medical center');
+  }
+
+  void _selectHospital(HospitalModel hospital) {
+    final point = LatLng(hospital.lat, hospital.lon);
+    setState(() {
+      _destination = point;
+      _mapCenter = point;
+      _destinationController.text = hospital.name;
+    });
+    _destinationFocus.unfocus();
+    _mapController?.animateCamera(CameraUpdate.newLatLng(point));
+    _optimizeRoute();
   }
 
   @override
@@ -464,6 +603,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
                 onPressed: _recenter,
               ),
             ),
+          if (!picking && _approvedHospitals.isNotEmpty)
+            const Positioned(top: 16, left: 16, child: _FacilityLegend()),
           if (picking)
             _MapPinSheet(
               isPickup: _mode == _BookingMode.pickingPickup,
@@ -486,6 +627,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
                 destinationFocus: _destinationFocus,
                 isSearching: _isSearching || _isRouting,
                 destinationSuggestions: _destinationSuggestions,
+                recentSearches: _recentSearches,
                 tiers: _tiers,
                 selectedIndex: _selectedAmbulance,
                 distanceKm: _distanceKm,
@@ -496,21 +638,16 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
                     _geocode(value, isPickup: false),
                 onDestinationChanged: _onDestinationChanged,
                 onSuggestionSelected: _selectDestinationSuggestion,
-                onRecentSelected: (value) => _geocode(value, isPickup: false),
+                onRecentSelected: (value) async {
+                  await _rememberSearch(value);
+                  await _geocode(value, isPickup: false);
+                },
                 onSetPickupOnMap: () => _startMapPicking(pickup: true),
                 onSetDestinationOnMap: () => _startMapPicking(pickup: false),
                 onSelected: (index) =>
                     setState(() => _selectedAmbulance = index),
                 onRequest: _requestAmbulance,
-                onHospitalSelected: (hospital) {
-                  final point = LatLng(hospital.lat, hospital.lon);
-                  setState(() {
-                    _destination = point;
-                    _mapCenter = point;
-                    _destinationController.text = hospital.name;
-                  });
-                  _mapController?.animateCamera(CameraUpdate.newLatLng(point));
-                },
+                onHospitalSelected: _selectHospital,
               ),
             ),
         ],
@@ -527,6 +664,7 @@ class _TripPlanningSheet extends StatelessWidget {
     required this.destinationFocus,
     required this.isSearching,
     required this.destinationSuggestions,
+    required this.recentSearches,
     required this.tiers,
     required this.selectedIndex,
     required this.distanceKm,
@@ -550,7 +688,8 @@ class _TripPlanningSheet extends StatelessWidget {
   final TextEditingController destinationController;
   final FocusNode destinationFocus;
   final bool isSearching;
-  final List<MapSearchSuggestion> destinationSuggestions;
+  final List<PlaceSuggestion> destinationSuggestions;
+  final List<String> recentSearches;
   final List<_AmbulanceTier> tiers;
   final int selectedIndex;
   final double distanceKm;
@@ -559,7 +698,7 @@ class _TripPlanningSheet extends StatelessWidget {
   final ValueChanged<String> onPickupSubmitted;
   final ValueChanged<String> onDestinationSubmitted;
   final ValueChanged<String> onDestinationChanged;
-  final ValueChanged<MapSearchSuggestion> onSuggestionSelected;
+  final ValueChanged<PlaceSuggestion> onSuggestionSelected;
   final ValueChanged<String> onRecentSelected;
   final VoidCallback onSetPickupOnMap;
   final VoidCallback onSetDestinationOnMap;
@@ -598,7 +737,7 @@ class _TripPlanningSheet extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Choose pickup and destination without map API searches.',
+            'Type a destination to see location suggestions instantly.',
             style: TextStyle(fontSize: 12, color: AppColors.textGrey),
           ),
           const SizedBox(height: 16),
@@ -638,7 +777,7 @@ class _TripPlanningSheet extends StatelessWidget {
                           Icons.location_on_outlined,
                           color: AppColors.primary,
                         ),
-                        title: Text(suggestion.displayName),
+                        title: Text(suggestion.description),
                         onTap: () => onSuggestionSelected(suggestion),
                       ),
                     )
@@ -676,6 +815,24 @@ class _TripPlanningSheet extends StatelessWidget {
               ),
             ],
           ),
+          if (recentSearches.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Text(
+              'Recent locations',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
+              ),
+            ),
+            ...recentSearches.map(
+              (search) => _RecentLocation(
+                title: search.split(',').first.trim(),
+                subtitle: search,
+                onTap: () => onRecentSelected(search),
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           const Text(
             'Select Hospital Destination',
@@ -924,6 +1081,36 @@ class _QuickAction extends StatelessWidget {
   );
 }
 
+class _RecentLocation extends StatelessWidget {
+  const _RecentLocation({
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  @override
+  Widget build(BuildContext context) => ListTile(
+    onTap: onTap,
+    contentPadding: EdgeInsets.zero,
+    dense: true,
+    leading: const Icon(Icons.history_rounded, color: AppColors.textLight),
+    title: Text(
+      title,
+      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+    ),
+    subtitle: Text(
+      subtitle,
+      style: const TextStyle(fontSize: 11, color: AppColors.textGrey),
+    ),
+    trailing: const Icon(
+      Icons.north_west_rounded,
+      size: 17,
+      color: AppColors.textLight,
+    ),
+  );
+}
 class _TierCard extends StatelessWidget {
   const _TierCard({
     required this.tier,
@@ -1027,6 +1214,48 @@ class _MapActionButton extends StatelessWidget {
   );
 }
 
+class _FacilityLegend extends StatelessWidget {
+  const _FacilityLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            _LegendItem(color: Colors.green, label: 'Medical hospital'),
+            SizedBox(height: 4),
+            _LegendItem(color: Colors.orange, label: 'Clinic'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LegendItem extends StatelessWidget {
+  const _LegendItem({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.location_on, size: 15, color: color),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 11)),
+      ],
+    );
+  }
+}
+
 class _AmbulanceTier {
   const _AmbulanceTier(
     this.name,
@@ -1070,7 +1299,10 @@ class _ApprovedHospitalListState extends State<_ApprovedHospitalList> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
-            child: LinearProgressIndicator(minHeight: 2, color: AppColors.primary),
+            child: LinearProgressIndicator(
+              minHeight: 2,
+              color: AppColors.primary,
+            ),
           );
         }
         final docs = snapshot.data?.docs ?? [];
@@ -1088,8 +1320,7 @@ class _ApprovedHospitalListState extends State<_ApprovedHospitalList> {
             ),
           );
         }
-        final hospitals =
-            docs.map((d) => HospitalModel.fromDoc(d)).toList();
+        final hospitals = docs.map((d) => HospitalModel.fromDoc(d)).toList();
         return Column(
           children: hospitals.map((h) {
             final isSelected = _selectedId == h.id;
@@ -1102,7 +1333,9 @@ class _ApprovedHospitalListState extends State<_ApprovedHospitalList> {
                 duration: const Duration(milliseconds: 200),
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 12),
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
                   color: isSelected
                       ? AppColors.primary.withValues(alpha: 0.06)
@@ -1160,18 +1393,21 @@ class _ApprovedHospitalListState extends State<_ApprovedHospitalList> {
                                 children: h.services.take(3).map((s) {
                                   return Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 7, vertical: 2),
+                                      horizontal: 7,
+                                      vertical: 2,
+                                    ),
                                     decoration: BoxDecoration(
-                                      color: AppColors.primary
-                                          .withValues(alpha: 0.08),
-                                      borderRadius:
-                                          BorderRadius.circular(20),
+                                      color: AppColors.primary.withValues(
+                                        alpha: 0.08,
+                                      ),
+                                      borderRadius: BorderRadius.circular(20),
                                     ),
                                     child: Text(
                                       s,
                                       style: const TextStyle(
-                                          fontSize: 9,
-                                          color: AppColors.primary),
+                                        fontSize: 9,
+                                        color: AppColors.primary,
+                                      ),
                                     ),
                                   );
                                 }).toList(),

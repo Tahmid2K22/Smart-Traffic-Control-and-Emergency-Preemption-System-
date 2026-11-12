@@ -29,7 +29,9 @@ class DriverDashboardPage extends StatefulWidget {
 
 class _DriverDashboardPageState extends State<DriverDashboardPage> {
   late DriverProfile _driver;
+  List<AmbulanceRequest> _allPendingRequests = [];
   List<AmbulanceRequest> _pendingRequests = [];
+  Position? _latestPosition;
   AmbulanceRequest? _activeRequest;
 
   // streams
@@ -74,19 +76,21 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
 
   Future<void> _toggleOnline(bool value) async {
     await RequestService.setOnlineStatus(driverId: _driver.id, isOnline: value);
-    setState(() => _driver = DriverProfile(
-          id:               _driver.id,
-          firebaseUid:      _driver.firebaseUid,
-          name:             _driver.name,
-          phone:            _driver.phone,
-          vehicleType:      _driver.vehicleType,
-          vehicleNumber:    _driver.vehicleNumber,
-          isOnline:         value,
-          isApproved:       _driver.isApproved,
-          currentLat:       _driver.currentLat,
-          currentLng:       _driver.currentLng,
-          currentRequestId: _driver.currentRequestId,
-        ));
+    setState(
+      () => _driver = DriverProfile(
+        id: _driver.id,
+        firebaseUid: _driver.firebaseUid,
+        name: _driver.name,
+        phone: _driver.phone,
+        vehicleType: _driver.vehicleType,
+        vehicleNumber: _driver.vehicleNumber,
+        isOnline: value,
+        isApproved: _driver.isApproved,
+        currentLat: _driver.currentLat,
+        currentLng: _driver.currentLng,
+        currentRequestId: _driver.currentRequestId,
+      ),
+    );
     if (value) {
       _startListening();
       _startLocationUpdates();
@@ -94,7 +98,11 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       _pendingSub?.cancel();
       _activeSub?.cancel();
       _locationSub?.cancel();
-      setState(() { _pendingRequests = []; _activeRequest = null; });
+      setState(() {
+        _allPendingRequests = [];
+        _pendingRequests = [];
+        _activeRequest = null;
+      });
     }
   }
 
@@ -104,33 +112,55 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     // Pending requests feed
     _pendingSub = RequestService.streamPendingRequests().listen((list) {
       if (!mounted) return;
-      setState(() => _pendingRequests = list);
+      setState(() {
+        _allPendingRequests = list;
+        _pendingRequests = _nearbyRequests(list);
+      });
       // Start countdown for the first new request
       if (list.isNotEmpty && _countdownTimer == null) _startCountdown();
     });
 
     // Active request (accepted)
-    _activeSub = RequestService.streamDriverActiveRequest(_driver.id).listen((req) {
-      if (!mounted) return;
-      final prevReq = _activeRequest;
-      setState(() => _activeRequest = req);
-      // Start or stop chat unread listener when active request changes
-      if (req?.id != prevReq?.id) {
-        _chatSub?.cancel();
-        _lastSeenMessageCount = 0;
-        _unreadCount = 0;
-        if (req != null) {
-          _prepareTrafficSignals(req);
-          _chatSub = RequestService.streamMessages(req.id).listen((msgs) {
-            if (!mounted) return;
-            setState(() => _unreadCount = msgs.length - _lastSeenMessageCount < 0
-                ? 0
-                : msgs.length - _lastSeenMessageCount);
-          });
-        }
+    _activeSub = RequestService.streamDriverActiveRequest(_driver.id)
+        .listen((req) {
+          if (!mounted) return;
+          final prevReq = _activeRequest;
+          setState(() => _activeRequest = req);
+          // Start or stop chat unread listener when active request changes
+          if (req?.id != prevReq?.id) {
+            _chatSub?.cancel();
+            _lastSeenMessageCount = 0;
+            _unreadCount = 0;
+            if (req != null) {
+              _prepareTrafficSignals(req);
+              _chatSub = RequestService.streamMessages(req.id).listen((msgs) {
+                if (!mounted) return;
+                setState(
+                  () => _unreadCount = msgs.length - _lastSeenMessageCount < 0
+                      ? 0
+                      : msgs.length - _lastSeenMessageCount,
+                );
+              });
+            }
+          }
+        });
+  }
 
-      }
-    });
+  List<AmbulanceRequest> _nearbyRequests(List<AmbulanceRequest> requests) {
+    final position = _latestPosition;
+    if (position == null) return requests;
+    return requests
+        .where(
+          (request) =>
+              RequestService.distanceKm(
+                fromLat: position.latitude,
+                fromLng: position.longitude,
+                toLat: request.pickupLat,
+                toLng: request.pickupLng,
+              ) <=
+              RequestService.dispatchRadiusKm(request.createdAt),
+        )
+        .toList();
   }
 
   Future<void> _prepareTrafficSignals(AmbulanceRequest request) async {
@@ -152,7 +182,10 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     _countdown = 30;
     _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) { t.cancel(); return; }
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
       setState(() => _countdown--);
       if (_countdown <= 0) {
         t.cancel();
@@ -175,26 +208,39 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) return;
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return;
+    }
 
-    _locationSub = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 20),
-    ).listen((pos) {
-      RequestService.updateDriverLocation(
-        driverId: _driver.id,
-        lat: pos.latitude,
-        lng: pos.longitude,
-        currentRequestId: _driver.currentRequestId,
-      );
-      final activeRequest = _activeRequest;
-      if (activeRequest != null) {
-        _trafficService.updateDispatchLocation(
-          dispatchId: activeRequest.id,
-          driverUid: FirebaseAuth.instance.currentUser?.uid ?? '',
-          position: pos,
-        );
-      }
-    });
+    _locationSub =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 20,
+          ),
+        ).listen((pos) {
+          _latestPosition = pos;
+          if (mounted) {
+            setState(
+              () => _pendingRequests = _nearbyRequests(_allPendingRequests),
+            );
+          }
+          RequestService.updateDriverLocation(
+            driverId: _driver.id,
+            lat: pos.latitude,
+            lng: pos.longitude,
+            currentRequestId: _driver.currentRequestId,
+          );
+          final activeRequest = _activeRequest;
+          if (activeRequest != null) {
+            _trafficService.updateDispatchLocation(
+              dispatchId: activeRequest.id,
+              driverUid: FirebaseAuth.instance.currentUser?.uid ?? '',
+              position: pos,
+            );
+          }
+        });
   }
 
   // ── Accept / Reject ────────────────────────────────────────────────────────
@@ -203,11 +249,18 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     _countdownTimer?.cancel();
     _countdownTimer = null;
     try {
-      await RequestService.acceptRequest(requestId: request.id, driverId: _driver.id);
+      await RequestService.acceptRequest(
+        requestId: request.id,
+        driverId: _driver.id,
+      );
       if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => TrackingPage(requestId: request.id, isDriver: true, driverId: _driver.id),
+          builder: (_) => TrackingPage(
+            requestId: request.id,
+            isDriver: true,
+            driverId: _driver.id,
+          ),
         ),
       );
     } catch (e) {
@@ -219,13 +272,16 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     _countdownTimer?.cancel();
     _countdownTimer = null;
     setState(() {
-      _pendingRequests = _pendingRequests.where((r) => r.id != request.id).toList();
+      _pendingRequests = _pendingRequests
+          .where((r) => r.id != request.id)
+          .toList();
     });
     if (_pendingRequests.isNotEmpty) _startCountdown();
   }
 
-  void _showSnack(String msg) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating));
+  void _showSnack(String msg) => ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
+  );
 
   // ── Build ──────────────────────────────────────────────────────────────────
 
@@ -265,8 +321,8 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
               child: _activeRequest != null
                   ? _buildActiveRequestBanner()
                   : _driver.isOnline
-                      ? _buildPendingFeed()
-                      : _buildOfflineView(),
+                  ? _buildPendingFeed()
+                  : _buildOfflineView(),
             ),
           ],
         ),
@@ -279,25 +335,50 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
       decoration: const BoxDecoration(
         color: AppColors.white,
-        boxShadow: [BoxShadow(color: Color(0x0A000000), blurRadius: 8, offset: Offset(0, 2))],
+        boxShadow: [
+          BoxShadow(
+            color: Color(0x0A000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [AppColors.primary, AppColors.primaryDark]),
+              gradient: const LinearGradient(
+                colors: [AppColors.primary, AppColors.primaryDark],
+              ),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.local_shipping_rounded, color: Colors.white, size: 22),
+            child: const Icon(
+              Icons.local_shipping_rounded,
+              color: Colors.white,
+              size: 22,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(_driver.name, style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 16, color: AppColors.textDark)),
-                Text(_driver.vehicleNumber, style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey)),
+                Text(
+                  _driver.name,
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                Text(
+                  _driver.vehicleNumber,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: AppColors.textGrey,
+                  ),
+                ),
               ],
             ),
           ),
@@ -314,7 +395,9 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                 style: GoogleFonts.poppins(
                   fontSize: 10,
                   fontWeight: FontWeight.w600,
-                  color: _driver.isOnline ? AppColors.success : AppColors.textLight,
+                  color: _driver.isOnline
+                      ? AppColors.success
+                      : AppColors.textLight,
                 ),
               ),
             ],
@@ -323,7 +406,11 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
           IconButton(
             tooltip: 'Logout',
             onPressed: () => _showLogoutDialog(),
-            icon: const Icon(Icons.logout_rounded, color: AppColors.textGrey, size: 22),
+            icon: const Icon(
+              Icons.logout_rounded,
+              color: AppColors.textGrey,
+              size: 22,
+            ),
           ),
         ],
       ),
@@ -345,17 +432,29 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                 color: AppColors.primaryLight,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.logout_rounded, color: AppColors.primary, size: 32),
+              child: const Icon(
+                Icons.logout_rounded,
+                color: AppColors.primary,
+                size: 32,
+              ),
             ),
             const SizedBox(height: 20),
             Text(
               'Logout',
-              style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark),
+              style: GoogleFonts.poppins(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
               'Are you sure you want to log out?',
-              style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey, height: 1.5),
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                color: AppColors.textGrey,
+                height: 1.5,
+              ),
               textAlign: TextAlign.center,
             ),
           ],
@@ -370,10 +469,18 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.textGrey,
                     side: const BorderSide(color: AppColors.cardBorder),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
-                  child: Text('Cancel', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    'Cancel',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
@@ -382,17 +489,28 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                   onPressed: () {
                     Navigator.pop(ctx);
                     // Go offline first so we don't leave ghost-online state
-                    RequestService.setOnlineStatus(driverId: _driver.id, isOnline: false);
+                    RequestService.setOnlineStatus(
+                      driverId: _driver.id,
+                      isOnline: false,
+                    );
                     FirebaseAuth.instance.signOut();
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: AppColors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
-                  child: Text('Logout', style: GoogleFonts.poppins(fontSize: 14, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    'Logout',
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -413,12 +531,27 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
               color: AppColors.cardBorder.withValues(alpha: .4),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.wifi_off_rounded, size: 56, color: AppColors.textLight),
+            child: const Icon(
+              Icons.wifi_off_rounded,
+              size: 56,
+              color: AppColors.textLight,
+            ),
           ),
           const SizedBox(height: 20),
-          Text('You are offline', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+          Text(
+            'You are offline',
+            style: GoogleFonts.poppins(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textDark,
+            ),
+          ),
           const SizedBox(height: 8),
-          Text('Toggle online to start receiving requests', style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey), textAlign: TextAlign.center),
+          Text(
+            'Toggle online to start receiving requests',
+            style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey),
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );
@@ -430,13 +563,33 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.search_rounded, size: 56, color: AppColors.primary),
+            const Icon(
+              Icons.search_rounded,
+              size: 56,
+              color: AppColors.primary,
+            ),
             const SizedBox(height: 16),
-            Text('Looking for requests…', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+            Text(
+              'Looking for requests…',
+              style: GoogleFonts.poppins(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textDark,
+              ),
+            ),
             const SizedBox(height: 8),
-            Text('New requests will appear here instantly', style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey)),
+            Text(
+              'New requests will appear here instantly',
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                color: AppColors.textGrey,
+              ),
+            ),
             const SizedBox(height: 24),
-            const CircularProgressIndicator(color: AppColors.primary, strokeWidth: 2),
+            const CircularProgressIndicator(
+              color: AppColors.primary,
+              strokeWidth: 2,
+            ),
           ],
         ),
       );
@@ -470,124 +623,205 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(children: [
-                  const Icon(Icons.check_circle_rounded, color: AppColors.success),
-                  const SizedBox(width: 8),
-                  Text('Active Trip', style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: AppColors.textDark, fontSize: 16)),
-                ]),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.check_circle_rounded,
+                      color: AppColors.success,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Active Trip',
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 16),
-                _InfoRow(icon: Icons.person_rounded, label: 'Patient', value: req.userName),
-                _InfoRow(icon: Icons.phone_rounded, label: 'Phone', value: req.userPhone),
-                _InfoRow(icon: Icons.my_location_rounded, label: 'Pickup', value: req.pickupAddress),
-                _InfoRow(icon: Icons.flag_rounded, label: 'Destination', value: req.destinationAddress),
-                _InfoRow(icon: Icons.attach_money_rounded, label: 'Fare', value: '৳${req.estimatedFare}'),
+                _InfoRow(
+                  icon: Icons.person_rounded,
+                  label: 'Patient',
+                  value: req.userName,
+                ),
+                _InfoRow(
+                  icon: Icons.phone_rounded,
+                  label: 'Phone',
+                  value: req.userPhone,
+                ),
+                _InfoRow(
+                  icon: Icons.my_location_rounded,
+                  label: 'Pickup',
+                  value: req.pickupAddress,
+                ),
+                _InfoRow(
+                  icon: Icons.flag_rounded,
+                  label: 'Destination',
+                  value: req.destinationAddress,
+                ),
+                _InfoRow(
+                  icon: Icons.attach_money_rounded,
+                  label: 'Fare',
+                  value: '৳${req.estimatedFare}',
+                ),
               ],
             ),
           ),
           const SizedBox(height: 16),
-          Row(children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => RequestService.markArrived(req.id),
-                icon: const Icon(Icons.place_rounded),
-                label: Text('Arrived', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.primary,
-                  side: const BorderSide(color: AppColors.primary, width: 1.5),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () => RequestService.completeRequest(requestId: req.id, driverId: _driver.id),
-                icon: const Icon(Icons.check_rounded),
-                label: Text('Complete', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.success,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => TrackingPage(requestId: req.id, isDriver: true, driverId: _driver.id),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => RequestService.markArrived(req.id),
+                  icon: const Icon(Icons.place_rounded),
+                  label: Text(
+                    'Arrived',
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    side: const BorderSide(
+                      color: AppColors.primary,
+                      width: 1.5,
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                   ),
                 ),
-                icon: const Icon(Icons.map_rounded),
-                label: Text('Map', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                style: FilledButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => RequestService.completeRequest(
+                    requestId: req.id,
+                    driverId: _driver.id,
+                  ),
+                  icon: const Icon(Icons.check_rounded),
+                  label: Text(
+                    'Complete',
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        setState(() => _lastSeenMessageCount = _lastSeenMessageCount + _unreadCount);
-                        setState(() => _unreadCount = 0);
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => ChatPage(
-                              requestId: req.id,
-                              senderRole: SenderRole.driver,
-                              senderName: _driver.name,
-                              request: req,
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => TrackingPage(
+                        requestId: req.id,
+                        isDriver: true,
+                        driverId: _driver.id,
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.map_rounded),
+                  label: Text(
+                    'Map',
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          setState(
+                            () => _lastSeenMessageCount =
+                                _lastSeenMessageCount + _unreadCount,
+                          );
+                          setState(() => _unreadCount = 0);
+                          Navigator.of(context)
+                              .push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => ChatPage(
+                                    requestId: req.id,
+                                    senderRole: SenderRole.driver,
+                                    senderName: _driver.name,
+                                    request: req,
+                                  ),
+                                ),
+                              )
+                              .then((_) {
+                                // Reset unread after returning
+                                if (mounted) {
+                                  setState(() {
+                                    _unreadCount = 0;
+                                  });
+                                }
+                              });
+                        },
+                        icon: const Icon(Icons.chat_bubble_outline_rounded),
+                        label: Text(
+                          'Chat',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF1565C0),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_unreadCount > 0)
+                      Positioned(
+                        top: -6,
+                        right: -6,
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: const BoxDecoration(
+                            color: AppColors.warning,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              _unreadCount > 9 ? '9+' : '$_unreadCount',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
-                        ).then((_) {
-                          // Reset unread after returning
-                          if (mounted) setState(() { _unreadCount = 0; });
-                        });
-                      },
-                      icon: const Icon(Icons.chat_bubble_outline_rounded),
-                      label: Text('Chat', style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1565C0),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      ),
-                    ),
-                  ),
-                  if (_unreadCount > 0)
-                    Positioned(
-                      top: -6,
-                      right: -6,
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        decoration: const BoxDecoration(
-                          color: AppColors.warning,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Text(
-                            _unreadCount > 9 ? '9+' : '$_unreadCount',
-                            style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
-                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ]),
+            ],
+          ),
         ],
       ),
     );
@@ -617,7 +851,11 @@ class _IncomingRequestCard extends StatelessWidget {
         color: AppColors.white,
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
-          BoxShadow(color: AppColors.primary.withValues(alpha: .15), blurRadius: 20, offset: const Offset(0, 8)),
+          BoxShadow(
+            color: AppColors.primary.withValues(alpha: .15),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
         ],
       ),
       child: Column(
@@ -646,15 +884,33 @@ class _IncomingRequestCard extends StatelessWidget {
                         color: AppColors.primaryLight,
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: const Icon(Icons.emergency_rounded, color: AppColors.primary, size: 28),
+                      child: const Icon(
+                        Icons.emergency_rounded,
+                        color: AppColors.primary,
+                        size: 28,
+                      ),
                     ),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('New Request!', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                          Text(request.ambulanceType, style: GoogleFonts.poppins(fontSize: 13, color: AppColors.primary, fontWeight: FontWeight.w600)),
+                          Text(
+                            'New Request!',
+                            style: GoogleFonts.poppins(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textDark,
+                            ),
+                          ),
+                          Text(
+                            request.ambulanceType,
+                            style: GoogleFonts.poppins(
+                              fontSize: 13,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -664,7 +920,12 @@ class _IncomingRequestCard extends StatelessWidget {
                       height: 52,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: countdown > 12 ? AppColors.primary : AppColors.warning, width: 3),
+                        border: Border.all(
+                          color: countdown > 12
+                              ? AppColors.primary
+                              : AppColors.warning,
+                          width: 3,
+                        ),
                       ),
                       child: Center(
                         child: Text(
@@ -672,7 +933,9 @@ class _IncomingRequestCard extends StatelessWidget {
                           style: GoogleFonts.poppins(
                             fontSize: 18,
                             fontWeight: FontWeight.w700,
-                            color: countdown > 12 ? AppColors.primary : AppColors.warning,
+                            color: countdown > 12
+                                ? AppColors.primary
+                                : AppColors.warning,
                           ),
                         ),
                       ),
@@ -680,11 +943,31 @@ class _IncomingRequestCard extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 20),
-                _InfoRow(icon: Icons.person_rounded, label: 'Patient', value: request.userName),
-                _InfoRow(icon: Icons.my_location_rounded, label: 'Pickup', value: request.pickupAddress),
-                _InfoRow(icon: Icons.flag_rounded, label: 'Destination', value: request.destinationAddress),
-                _InfoRow(icon: Icons.straighten_rounded, label: 'Distance', value: '${request.distanceKm.toStringAsFixed(1)} km'),
-                _InfoRow(icon: Icons.payments_rounded, label: 'Fare', value: '৳${request.estimatedFare}'),
+                _InfoRow(
+                  icon: Icons.person_rounded,
+                  label: 'Patient',
+                  value: request.userName,
+                ),
+                _InfoRow(
+                  icon: Icons.my_location_rounded,
+                  label: 'Pickup',
+                  value: request.pickupAddress,
+                ),
+                _InfoRow(
+                  icon: Icons.flag_rounded,
+                  label: 'Destination',
+                  value: request.destinationAddress,
+                ),
+                _InfoRow(
+                  icon: Icons.straighten_rounded,
+                  label: 'Distance',
+                  value: '${request.distanceKm.toStringAsFixed(1)} km',
+                ),
+                _InfoRow(
+                  icon: Icons.payments_rounded,
+                  label: 'Fare',
+                  value: '৳${request.estimatedFare}',
+                ),
                 const SizedBox(height: 24),
                 Row(
                   children: [
@@ -695,9 +978,17 @@ class _IncomingRequestCard extends StatelessWidget {
                           foregroundColor: AppColors.textGrey,
                           side: const BorderSide(color: AppColors.cardBorder),
                           padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
-                        child: Text('Reject', style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 15)),
+                        child: Text(
+                          'Reject',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -706,11 +997,19 @@ class _IncomingRequestCard extends StatelessWidget {
                       child: FilledButton.icon(
                         onPressed: onAccept,
                         icon: const Icon(Icons.check_rounded),
-                        label: Text('Accept', style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 15)),
+                        label: Text(
+                          'Accept',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
                         style: FilledButton.styleFrom(
                           backgroundColor: AppColors.primary,
                           padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
                       ),
                     ),
@@ -726,22 +1025,44 @@ class _IncomingRequestCard extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.icon, required this.label, required this.value});
+  const _InfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
   final IconData icon;
   final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 17, color: AppColors.primary),
-            const SizedBox(width: 8),
-            Text('$label: ', style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey, fontWeight: FontWeight.w500)),
-            Expanded(child: Text(value, style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w600), maxLines: 2, overflow: TextOverflow.ellipsis)),
-          ],
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 17, color: AppColors.primary),
+        const SizedBox(width: 8),
+        Text(
+          '$label: ',
+          style: GoogleFonts.poppins(
+            fontSize: 13,
+            color: AppColors.textGrey,
+            fontWeight: FontWeight.w500,
+          ),
         ),
-      );
+        Expanded(
+          child: Text(
+            value,
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              color: AppColors.textDark,
+              fontWeight: FontWeight.w600,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    ),
+  );
 }

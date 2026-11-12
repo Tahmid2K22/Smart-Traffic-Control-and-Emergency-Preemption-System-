@@ -1,4 +1,7 @@
-import 'package:firebase_auth/firebase_auth.dart';
+﻿import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+import 'dart:math' as math;
 
 import '../models/message_model.dart';
 import '../models/request_model.dart';
@@ -100,26 +103,36 @@ class RequestService {
       throw StateError('Log in to your account before booking an ambulance.');
     }
     if (!supabaseReady) throw StateError('Supabase is not initialised.');
-    final response = await sb
-        .from(SupabaseTables.requests)
-        .insert({
-          'user_firebase_uid': userFirebaseUid,
-          'user_name': userName,
-          'user_phone': userPhone,
-          'status': 'pending',
-          'ambulance_type': ambulanceType,
-          'pickup_lat': pickupLat,
-          'pickup_lng': pickupLng,
-          'pickup_address': pickupAddress,
-          'destination_lat': destinationLat,
-          'destination_lng': destinationLng,
-          'destination_address': destinationAddress,
-          'estimated_fare': estimatedFare,
-          'distance_km': distanceKm,
-        })
-        .select('id')
-        .single();
-    return response['id'] as String;
+    try {
+      final response = await sb
+          .from(SupabaseTables.requests)
+          .insert({
+            'user_firebase_uid': userFirebaseUid,
+            'user_name': userName,
+            'user_phone': userPhone,
+            'status': 'pending',
+            'ambulance_type': ambulanceType,
+            'pickup_lat': pickupLat,
+            'pickup_lng': pickupLng,
+            'pickup_address': pickupAddress,
+            'destination_lat': destinationLat,
+            'destination_lng': destinationLng,
+            'destination_address': destinationAddress,
+            'estimated_fare': estimatedFare,
+            'distance_km': distanceKm,
+          })
+          .select('id')
+          .single();
+      final id = response['id']?.toString();
+      if (id == null || id.isEmpty) {
+        throw StateError('The dispatch server returned no booking id.');
+      }
+      return id;
+    } on PostgrestException catch (error) {
+      throw StateError(
+        'Dispatch server rejected the booking: ${error.message}',
+      );
+    }
   }
 
   /// Fetches all requests for the current user (for Activity page).
@@ -154,14 +167,20 @@ class RequestService {
     required String driverId,
   }) async {
     if (!supabaseReady) return;
-    await sb
+    final accepted = await sb
         .from(SupabaseTables.requests)
         .update({
           'driver_id': driverId,
           'status': RequestStatus.accepted.toDbString(),
           'accepted_at': DateTime.now().toIso8601String(),
         })
-        .eq('id', requestId);
+        .eq('id', requestId)
+        .eq('status', RequestStatus.pending.toDbString())
+        .select('id')
+        .maybeSingle();
+    if (accepted == null) {
+      throw StateError('This request has already been accepted or cancelled.');
+    }
 
     await sb
         .from(SupabaseTables.drivers)
@@ -218,9 +237,94 @@ class RequestService {
         .from(SupabaseTables.requests)
         .stream(primaryKey: ['id'])
         .eq('id', requestId)
-        .map(
-          (rows) => rows.isEmpty ? null : AmbulanceRequest.fromMap(rows.first),
-        );
+        .asyncMap((rows) async {
+          if (rows.isEmpty) return null;
+          final row = Map<String, dynamic>.from(rows.first);
+          final driverId = row['driver_id'] as String?;
+          if (driverId != null) {
+            final driver = await sb
+                .from(SupabaseTables.drivers)
+                .select('name, phone, current_lat, current_lng')
+                .eq('id', driverId)
+                .maybeSingle();
+            if (driver != null) row['drivers'] = driver;
+          }
+          return AmbulanceRequest.fromMap(row);
+        });
+  }
+
+  /// Reads the request with its current driver GPS position. This short
+  /// refresh is needed because driver coordinates change independently of the
+  /// request row.
+  static Future<AmbulanceRequest?> getRequest(String requestId) async {
+    if (!supabaseReady) return null;
+    final row = await sb
+        .from(SupabaseTables.requests)
+        .select('*, drivers(name, phone, current_lat, current_lng)')
+        .eq('id', requestId)
+        .maybeSingle();
+    return row == null
+        ? null
+        : AmbulanceRequest.fromMap(Map<String, dynamic>.from(row));
+  }
+
+  /// Counts online ambulances close enough to receive the request. The
+  /// dispatch radius grows as the request waits, like a ride-hailing system.
+  static Stream<int> streamNearbyDriverCount({
+    required double pickupLat,
+    required double pickupLng,
+    required DateTime requestedAt,
+  }) {
+    if (!supabaseReady) return const Stream.empty();
+    return sb
+        .from(SupabaseTables.drivers)
+        .stream(primaryKey: ['id'])
+        .eq('is_online', true)
+        .map((rows) {
+          final radiusKm = dispatchRadiusKm(requestedAt);
+          return rows.where((row) {
+            final lat = (row['current_lat'] as num?)?.toDouble();
+            final lng = (row['current_lng'] as num?)?.toDouble();
+            return lat != null &&
+                lng != null &&
+                _distanceKm(pickupLat, pickupLng, lat, lng) <= radiusKm;
+          }).length;
+        });
+  }
+
+  static double dispatchRadiusKm(DateTime requestedAt) {
+    final waited = DateTime.now().difference(requestedAt).inSeconds;
+    if (waited < 15) return 5;
+    if (waited < 35) return 10;
+    if (waited < 60) return 20;
+    return 50;
+  }
+
+  static double distanceKm({
+    required double fromLat,
+    required double fromLng,
+    required double toLat,
+    required double toLng,
+  }) => _distanceKm(fromLat, fromLng, toLat, toLng);
+
+  static double _distanceKm(
+    double fromLat,
+    double fromLng,
+    double toLat,
+    double toLng,
+  ) {
+    const earthRadiusKm = 6371.0;
+    final latDelta = (toLat - fromLat) * math.pi / 180;
+    final lngDelta = (toLng - fromLng) * math.pi / 180;
+    final fromLatitude = fromLat * math.pi / 180;
+    final toLatitude = toLat * math.pi / 180;
+    final a =
+        math.sin(latDelta / 2) * math.sin(latDelta / 2) +
+        math.cos(fromLatitude) *
+            math.cos(toLatitude) *
+            math.sin(lngDelta / 2) *
+            math.sin(lngDelta / 2);
+    return earthRadiusKm * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
   }
 
   /// Stream of the driver's own active requests.
