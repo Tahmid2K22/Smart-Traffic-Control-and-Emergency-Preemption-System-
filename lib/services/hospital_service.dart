@@ -11,6 +11,53 @@ class HospitalService {
 
   // ── Registration ───────────────────────────────────────────────────────────
 
+  Future<UserCredential> registerHospitalAccount({
+    required String name,
+    required String email,
+    required String phone,
+    required String password,
+    required String address,
+  }) async {
+    final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      email: email.trim(),
+      password: password,
+    );
+    final user = credential.user;
+    if (user == null) {
+      throw FirebaseAuthException(
+        code: 'hospital-registration-failed',
+        message: 'The hospital account could not be created.',
+      );
+    }
+
+    await _firestore.collection('users').doc(user.uid).set({
+      'uid': user.uid,
+      'name': name.trim(),
+      'fullName': name.trim(),
+      'email': email.trim(),
+      'phone': phone.trim(),
+      'address': address.trim(),
+      'role': 'hospital',
+      'isApproved': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    await _firestore.collection('hospitals').add({
+      'name': name.trim(),
+      'email': email.trim(),
+      'phone': phone.trim(),
+      'address': address.trim(),
+      'services': <String>[],
+      'diagnoses': <String>[],
+      'beds': 0,
+      'isApproved': false,
+      'registeredBy': user.uid,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    return credential;
+  }
+
   Future<void> registerHospital({
     required String name,
     required String city,
@@ -42,6 +89,43 @@ class HospitalService {
       .collection('hospitals')
       .where('isApproved', isEqualTo: true)
       .snapshots();
+
+  Future<DocumentSnapshot<Map<String, dynamic>>> getHospitalForUser(
+      String uid) async {
+    final result = await _firestore
+        .collection('hospitals')
+        .where('registeredBy', isEqualTo: uid)
+        .limit(1)
+        .get();
+    if (result.docs.isEmpty) {
+      throw StateError('No hospital profile was found for this account.');
+    }
+    return result.docs.first;
+  }
+
+  Future<void> updateHospitalProfile({
+    required String hospitalId,
+    required String address,
+    required int beds,
+    required List<String> services,
+    required List<String> specialties,
+    double? latitude,
+    double? longitude,
+  }) async {
+    final updates = <String, dynamic>{
+      'address': address.trim(),
+      'beds': beds,
+      'services': services,
+      'diagnoses': specialties,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    if (latitude != null && longitude != null) {
+      updates['lat'] = latitude;
+      updates['lon'] = longitude;
+      updates['location'] = GeoPoint(latitude, longitude);
+    }
+    await _firestore.collection('hospitals').doc(hospitalId).update(updates);
+  }
 
   // ── Seed real Khulna hospitals ─────────────────────────────────────────────
 

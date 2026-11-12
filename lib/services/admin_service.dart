@@ -237,10 +237,14 @@ class AdminService {
 
   /// Approve a hospital
   Future<void> approveHospital(String id, {String name = ''}) async {
-    await _firestore
-        .collection('hospitals')
-        .doc(id)
-        .update({'isApproved': true});
+    final hospital = await _firestore.collection('hospitals').doc(id).get();
+    await _firestore.collection('hospitals').doc(id).update({'isApproved': true});
+    final registeredBy = hospital.data()?['registeredBy'] as String?;
+    if (registeredBy != null && registeredBy.isNotEmpty) {
+      await _firestore.collection('users').doc(registeredBy).update({
+        'isApproved': true,
+      });
+    }
     await _writeLog(
       action: 'approve_hospital',
       targetType: 'hospital',

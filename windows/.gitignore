@@ -1,5 +1,20 @@
 flutter/ephemeral/
 
+# Windows build output and local tooling
+build/
+Debug/
+Release/
+RelWithDebInfo/
+*.exe
+*.dll
+*.pdb
+.vs/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
 # Visual Studio user-specific files.
 *.suo
 *.user
