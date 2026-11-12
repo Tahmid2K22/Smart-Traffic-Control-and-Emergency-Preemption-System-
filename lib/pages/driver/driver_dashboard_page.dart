@@ -14,6 +14,7 @@ import '../../services/traffic_service.dart';
 import '../../services/map_search_service.dart';
 import '../chat_page.dart';
 import '../tracking_page.dart';
+import 'intersection_search_page.dart';
 
 /// Uber-like dashboard for approved drivers.
 /// Shows an online/offline toggle and a real-time incoming-request card.
@@ -236,6 +237,30 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
         child: Column(
           children: [
             _buildHeader(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => IntersectionSearchPage(
+                        dispatchId: _activeRequest?.id,
+                      ),
+                    ),
+                  ),
+                  icon: const Icon(Icons.traffic_rounded),
+                  label: const Text('Find intersections · Emergency escape'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+            ),
             Expanded(
               child: _activeRequest != null
                   ? _buildActiveRequestBanner()
