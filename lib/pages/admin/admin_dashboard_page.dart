@@ -12,6 +12,7 @@ import '../traffic_light_control_page.dart';
 import 'drivers_management_page.dart';
 import 'users_management_page.dart';
 import 'hospitals_management_page.dart';
+import 'intersections_management_page.dart';
 import 'admin_activity_log_page.dart';
 import 'admin_verification_dashboard.dart';
 
@@ -312,6 +313,24 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           else
             _buildStatsGrid(),
           28.heightBox,
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(
+                Icons.traffic_rounded,
+                color: AppColors.primary,
+              ),
+              title: const Text('Manage intersections'),
+              subtitle: const Text('Add, edit, enable or disable intersections'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const IntersectionsManagementPage(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           // -- Traffic Light quick-access card -----------------------------
           GestureDetector(
             onTap: () => Navigator.push(

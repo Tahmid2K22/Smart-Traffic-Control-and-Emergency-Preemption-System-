@@ -11,6 +11,7 @@ import '../services/request_service.dart';
 import '../services/deep_link_navigation_service.dart';
 import '../services/map_search_service.dart';
 import 'chat_page.dart';
+import 'driver/intersection_search_page.dart';
 
 /// Shared live-tracking screen shown to both user and driver after a request
 /// is accepted. Polls the request real-time via Supabase stream and updates
@@ -63,7 +64,9 @@ class _TrackingPageState extends State<TrackingPage> {
       if (req?.status == RequestStatus.completed ||
           req?.status == RequestStatus.cancelled) {
         Future.delayed(const Duration(seconds: 2), () {
-          if (mounted) Navigator.of(context).pop();
+          if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+            Navigator.of(context).pop();
+          }
         });
       }
     });
@@ -206,6 +209,21 @@ class _TrackingPageState extends State<TrackingPage> {
         title: Text(widget.isDriver ? 'Active Trip' : 'Tracking your driver'),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        actions: [
+          if (widget.isDriver)
+            TextButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => IntersectionSearchPage(
+                    dispatchId: isActive ? widget.requestId : null,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.traffic_rounded),
+              label: const Text('Intersections'),
+              style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+            ),
+        ],
       ),
       floatingActionButton: (!widget.isDriver && req != null && isActive)
           ? FloatingActionButton.extended(
