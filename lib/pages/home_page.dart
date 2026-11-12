@@ -3,8 +3,6 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:geocoding/geocoding.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -26,49 +24,27 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _searchController = TextEditingController();
   final _searchFocus = FocusNode();
-  Geocoding? _geocoder;
   String _name = 'User';
   String _initials = 'U';
-  String _region = 'Your area';
   int _unreadNotifications = 0;
   String _query = '';
   bool _loadingProfile = true;
   final _hospitalService = HospitalService();
   StreamSubscription<QuerySnapshot>? _hospitalSubscription;
-  List<HospitalData> _hospitals = [];
   List<_SearchItem> _searchItems = [];
 
   @override
   void initState() {
     super.initState();
     _loadDashboardData();
-    _loadRegion();
     _hospitalSubscription = _hospitalService.approvedHospitalsStream().listen((
       snapshot,
     ) {
       if (!mounted) return;
-      final hospitals = snapshot.docs
-          .map(HospitalModel.fromDoc)
-          .where((hospital) => hospital.name.trim().isNotEmpty)
-          .map(
-            (hospital) => HospitalData(
-              name: hospital.name,
-              address: hospital.address.isNotEmpty
-                  ? hospital.address
-                  : hospital.city,
-              distance: 'Available now',
-              isOpen: true,
-              beds: hospital.beds,
-              specialties: [
-                ...hospital.services,
-                ...hospital.diagnoses,
-              ].toSet().take(3).toList(),
-            ),
-          )
-          .toList();
       setState(() {
-        _hospitals = hospitals;
-        _searchItems = hospitals
+        _searchItems = snapshot.docs
+            .map(HospitalModel.fromDoc)
+            .where((hospital) => hospital.name.trim().isNotEmpty)
             .map(
               (hospital) => _SearchItem(
                 hospital.name,
@@ -117,42 +93,6 @@ class _HomePageState extends State<HomePage> {
       _initials = _makeInitials(safeName);
       _loadingProfile = false;
     });
-  }
-
-  Future<void> _loadRegion() async {
-    try {
-      if (!await Geolocator.isLocationServiceEnabled()) return;
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        return;
-      }
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.low,
-          distanceFilter: 250,
-        ),
-      );
-      _geocoder ??= Geocoding();
-      final marks = await _geocoder!.placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
-      if (!mounted || marks.isEmpty) return;
-      final mark = marks.first;
-      final area = mark.administrativeArea?.trim().isNotEmpty == true
-          ? mark.administrativeArea!
-          : mark.locality;
-      if (area != null && area.trim().isNotEmpty) {
-        setState(() => _region = area);
-      }
-    } catch (e) {
-      // Catch all errors (including TypeErrors from missing JS SDKs) to prevent red screen
-      // Keep the last known label when platform location or geocoding is unavailable.
-    }
   }
 
   String _firstName(String name) => name.split(RegExp(r'\s+')).first;
@@ -210,8 +150,6 @@ class _HomePageState extends State<HomePage> {
             _buildEmergencyBanner(),
             const SizedBox(height: 24),
             _buildServiceGrid(context),
-            const SizedBox(height: 24),
-            _buildNearbyHospitals(context),
             const SizedBox(height: 16),
             _buildHospitalRequestSection(context),
             const SizedBox(height: 20),
@@ -527,180 +465,6 @@ class _HomePageState extends State<HomePage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildNearbyHospitals(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Nearby Hospitals',
-                  style: GoogleFonts.poppins(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textDark,
-                  ),
-                ),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.location_on_rounded,
-                      size: 14,
-                      color: AppColors.primary,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      _region,
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: AppColors.textGrey,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            TextButton.icon(
-              onPressed: () => _openPlaces(NearbyPlaceType.hospitals),
-              icon: const Icon(
-                Icons.map_rounded,
-                size: 16,
-                color: AppColors.primary,
-              ),
-              label: Text(
-                'View Map',
-                style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.primary,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 12),
-      if (_hospitals.isEmpty)
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 20),
-          child: Text(
-            'No approved hospitals available yet.',
-            style: TextStyle(color: AppColors.textGrey),
-          ),
-        )
-      else
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          itemCount: _hospitals.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 12),
-          itemBuilder: (_, index) => _hospitalCard(_hospitals[index]),
-        ),
-    ],
-  );
-
-  Widget _hospitalCard(HospitalData hospital) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppColors.primaryLight,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(
-              Icons.local_hospital_rounded,
-              color: AppColors.primary,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  hospital.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textDark,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${hospital.address} • ${hospital.distance}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textGrey,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: hospital.isOpen
-                            ? AppColors.successLight
-                            : AppColors.warningLight,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        hospital.isOpen ? 'Open' : 'Closed',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: hospital.isOpen
-                              ? AppColors.success
-                              : AppColors.warning,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${hospital.beds} beds',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textGrey,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            tooltip: 'Get directions',
-            onPressed: () => _openPlaces(NearbyPlaceType.hospitals),
-            icon: const Icon(
-              Icons.directions_rounded,
-              color: AppColors.primary,
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -1,9 +1,14 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../constants/colors.dart';
+import '../models/models.dart';
 import '../services/deep_link_navigation_service.dart';
+import '../services/hospital_service.dart';
 import '../services/places_api_service.dart';
 
 enum NearbyPlaceType { hospitals, pharmacies }
@@ -23,7 +28,10 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
   bool _showMap = false;
   bool _loadingPlaces = true;
   final _placesApi = PlacesApiService();
+  final _hospitalService = HospitalService();
+  StreamSubscription<QuerySnapshot>? _hospitalSubscription;
   List<NearbyPlaceResult> _apiPlaces = const [];
+  List<HospitalModel> _registeredHospitals = const [];
   bool _locationReady = false;
 
   String get _title => widget.type == NearbyPlaceType.hospitals
@@ -36,11 +44,25 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
     super.initState();
     _loadLocation();
     _loadNearbyPlaces(_fallback);
+    if (widget.type == NearbyPlaceType.hospitals) {
+      _hospitalSubscription = _hospitalService.approvedHospitalsStream().listen(
+        (snapshot) {
+          if (!mounted) return;
+          setState(() {
+            _registeredHospitals = snapshot.docs
+                .map(HospitalModel.fromDoc)
+                .where((hospital) => hospital.name.trim().isNotEmpty)
+                .toList();
+          });
+        },
+      );
+    }
   }
 
   @override
   void dispose() {
     _placesApi.dispose();
+    _hospitalSubscription?.cancel();
     super.dispose();
   }
 
@@ -105,38 +127,93 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
   }
 
   List<_Place> get _places {
-    if (_apiPlaces.isNotEmpty) {
-      return _apiPlaces
-          .where((place) {
-            final distance = Geolocator.distanceBetween(
-              _userLocation.latitude,
-              _userLocation.longitude,
-              place.location.latitude,
-              place.location.longitude,
-            );
-            return distance <= _radiusKm * 1000;
-          })
-          .map(
-            (place) => _Place(
-              place.name,
-              place.address,
-              Geolocator.distanceBetween(
-                    _userLocation.latitude,
-                    _userLocation.longitude,
-                    place.location.latitude,
-                    place.location.longitude,
-                  ) /
-                  1000,
-              place.isOpen ?? true,
-              widget.type == NearbyPlaceType.hospitals
-                  ? Icons.local_hospital_rounded
-                  : Icons.medication_rounded,
-              place.location,
-            ),
-          )
-          .toList();
-    }
-    return const [];
+    final registered = widget.type == NearbyPlaceType.hospitals
+        ? _registeredHospitals
+              .where((hospital) => hospital.lat != 0 && hospital.lon != 0)
+              .map(
+                (hospital) => _Place.registered(
+                  hospital,
+                  _distanceKm(
+                    LatLng(hospital.lat, hospital.lon),
+                    _userLocation,
+                  ),
+                ),
+              )
+              .where((place) => place.distanceKm <= _radiusKm)
+              .toList()
+        : <_Place>[];
+    final googlePlaces = _apiPlaces
+        .where((place) {
+          final distance = Geolocator.distanceBetween(
+            _userLocation.latitude,
+            _userLocation.longitude,
+            place.location.latitude,
+            place.location.longitude,
+          );
+          return distance <= _radiusKm * 1000;
+        })
+        .map(
+          (place) => _Place.google(
+            place,
+            _distanceKm(place.location, _userLocation),
+            widget.type == NearbyPlaceType.hospitals
+                ? Icons.local_hospital_rounded
+                : Icons.medication_rounded,
+          ),
+        )
+        .toList();
+    return [...registered, ...googlePlaces]
+      ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+  }
+
+  double _distanceKm(LatLng first, LatLng second) =>
+      Geolocator.distanceBetween(
+        first.latitude,
+        first.longitude,
+        second.latitude,
+        second.longitude,
+      ) /
+      1000;
+
+  Future<void> _showHospitalDetails(HospitalModel hospital) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Text(
+                hospital.name,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _HospitalDetailRow(Icons.location_on_rounded, hospital.address),
+              if (hospital.phone.trim().isNotEmpty)
+                _HospitalDetailRow(Icons.phone_rounded, hospital.phone),
+              if (hospital.email.trim().isNotEmpty)
+                _HospitalDetailRow(Icons.email_rounded, hospital.email),
+              _HospitalDetailRow(Icons.bed_rounded, '${hospital.beds} beds'),
+              if (hospital.services.isNotEmpty)
+                _HospitalDetailRow(
+                  Icons.medical_services_rounded,
+                  hospital.services.join(', '),
+                ),
+              if (hospital.diagnoses.isNotEmpty)
+                _HospitalDetailRow(
+                  Icons.local_hospital_rounded,
+                  hospital.diagnoses.join(', '),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _openDirections(_Place place) async {
@@ -228,6 +305,9 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
                       child: _PlaceCard(
                         place: place,
                         onDirections: () => _openDirections(place),
+                        onDetails: place.hospital == null
+                            ? null
+                            : () => _showHospitalDetails(place.hospital!),
                       ),
                     ),
                   ),
@@ -310,9 +390,14 @@ class _Header extends StatelessWidget {
 }
 
 class _PlaceCard extends StatelessWidget {
-  const _PlaceCard({required this.place, required this.onDirections});
+  const _PlaceCard({
+    required this.place,
+    required this.onDirections,
+    this.onDetails,
+  });
   final _Place place;
   final VoidCallback onDirections;
+  final VoidCallback? onDetails;
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(16),
@@ -321,59 +406,101 @@ class _PlaceCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(16),
       border: Border.all(color: AppColors.cardBorder),
     ),
-    child: Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: AppColors.primaryLight,
-            borderRadius: BorderRadius.circular(12),
+    child: InkWell(
+      onTap: onDetails,
+      borderRadius: BorderRadius.circular(16),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.primaryLight,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(place.icon, color: AppColors.primary),
           ),
-          child: Icon(place.icon, color: AppColors.primary),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                place.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textDark,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                place.address,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
-              ),
-              const SizedBox(height: 7),
-              Row(
-                children: [
-                  Text(
-                    '${place.distanceKm.toStringAsFixed(1)} km',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textGrey,
-                    ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  place.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
                   ),
-                  const SizedBox(width: 8),
-                  _StatusChip(isOpen: place.isOpen),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  place.address,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textGrey,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Row(
+                  children: [
+                    Text(
+                      '${place.distanceKm.toStringAsFixed(1)} km',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textGrey,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _StatusChip(isOpen: place.isOpen),
+                    if (place.hospital != null) ...[
+                      const SizedBox(width: 8),
+                      const Text(
+                        'Registered',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(width: 8),
-        IconButton(
-          tooltip: 'Open directions',
-          onPressed: onDirections,
-          icon: const Icon(Icons.directions_rounded, color: AppColors.primary),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Open location in maps',
+            onPressed: onDirections,
+            icon: const Icon(
+              Icons.directions_rounded,
+              color: AppColors.primary,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _HospitalDetailRow extends StatelessWidget {
+  const _HospitalDetailRow(this.icon, this.value);
+  final IconData icon;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: AppColors.primary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(value, style: const TextStyle(color: AppColors.textDark)),
         ),
       ],
     ),
@@ -402,18 +529,26 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _Place {
-  const _Place(
-    this.name,
-    this.address,
-    this.distanceKm,
-    this.isOpen,
-    this.icon, [
-    this.location,
-  ]);
+  _Place.google(NearbyPlaceResult place, this.distanceKm, this.icon)
+    : name = place.name,
+      address = place.address,
+      isOpen = place.isOpen ?? true,
+      location = place.location,
+      hospital = null;
+
+  _Place.registered(HospitalModel hospital, this.distanceKm)
+    : name = hospital.name,
+      address = hospital.address.isNotEmpty ? hospital.address : hospital.city,
+      isOpen = true,
+      icon = Icons.local_hospital_rounded,
+      location = LatLng(hospital.lat, hospital.lon),
+      hospital = hospital;
+
   final String name;
   final String address;
   final double distanceKm;
   final bool isOpen;
   final IconData icon;
   final LatLng? location;
+  final HospitalModel? hospital;
 }
