@@ -34,9 +34,12 @@ class TrackingPage extends StatefulWidget {
 class _TrackingPageState extends State<TrackingPage> {
   AmbulanceRequest? _request;
   StreamSubscription<AmbulanceRequest?>? _sub;
+  StreamSubscription<int>? _nearbyDriversSub;
+  Timer? _locationRefreshTimer;
   GoogleMapController? _mapController;
   final _mapSearchService = MapSearchService();
   Set<Polyline> _routePolylines = const {};
+  int _nearbyDriverCount = 0;
 
   static const _defaultCenter = LatLng(23.8103, 90.4125);
 
@@ -46,18 +49,54 @@ class _TrackingPageState extends State<TrackingPage> {
     _sub = RequestService.streamRequest(widget.requestId).listen((req) {
       if (!mounted) return;
       final routeChanged = req != null && req.id != _request?.id;
+      final dispatchChanged =
+          req != null &&
+          (req.id != _request?.id ||
+              req.status != _request?.status ||
+              req.driverId != _request?.driverId);
       setState(() => _request = req);
       if (routeChanged) _loadRoute(req);
+      if (dispatchChanged) _watchNearbyDrivers(req);
       _animateToRelevantPin();
 
       // Auto-pop when trip is done
-      if (req?.status == RequestStatus.completed || req?.status == RequestStatus.cancelled) {
+      if (req?.status == RequestStatus.completed ||
+          req?.status == RequestStatus.cancelled) {
         Future.delayed(const Duration(seconds: 2), () {
           if (mounted) Navigator.of(context).pop();
         });
       }
-
     });
+    _locationRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _refreshRequest();
+    });
+  }
+
+  Future<void> _refreshRequest() async {
+    final request = await RequestService.getRequest(widget.requestId);
+    if (!mounted || request == null) return;
+    final dispatchChanged =
+        request.status != _request?.status ||
+        request.driverId != _request?.driverId;
+    setState(() => _request = request);
+    if (dispatchChanged) _watchNearbyDrivers(request);
+    _animateToRelevantPin();
+  }
+
+  void _watchNearbyDrivers(AmbulanceRequest request) {
+    _nearbyDriversSub?.cancel();
+    if (request.status != RequestStatus.pending) {
+      setState(() => _nearbyDriverCount = 0);
+      return;
+    }
+    _nearbyDriversSub =
+        RequestService.streamNearbyDriverCount(
+          pickupLat: request.pickupLat,
+          pickupLng: request.pickupLng,
+          requestedAt: request.createdAt,
+        ).listen((count) {
+          if (mounted) setState(() => _nearbyDriverCount = count);
+        });
   }
 
   Future<void> _loadRoute(AmbulanceRequest request) async {
@@ -85,6 +124,8 @@ class _TrackingPageState extends State<TrackingPage> {
   @override
   void dispose() {
     _sub?.cancel();
+    _nearbyDriversSub?.cancel();
+    _locationRefreshTimer?.cancel();
     _mapSearchService.dispose();
     super.dispose();
   }
@@ -111,29 +152,39 @@ class _TrackingPageState extends State<TrackingPage> {
     final markers = <Marker>{};
 
     // Pickup marker
-    markers.add(Marker(
-      markerId: const MarkerId('pickup'),
-      position: LatLng(req.pickupLat, req.pickupLng),
-      infoWindow: InfoWindow(title: 'Pickup: ${req.pickupAddress}'),
-      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-    ));
+    markers.add(
+      Marker(
+        markerId: const MarkerId('pickup'),
+        position: LatLng(req.pickupLat, req.pickupLng),
+        infoWindow: InfoWindow(title: 'Pickup: ${req.pickupAddress}'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
+      ),
+    );
 
     // Destination marker
-    markers.add(Marker(
-      markerId: const MarkerId('destination'),
-      position: LatLng(req.destinationLat, req.destinationLng),
-      infoWindow: InfoWindow(title: 'Destination: ${req.destinationAddress}'),
-      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-    ));
+    markers.add(
+      Marker(
+        markerId: const MarkerId('destination'),
+        position: LatLng(req.destinationLat, req.destinationLng),
+        infoWindow: InfoWindow(title: 'Destination: ${req.destinationAddress}'),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+      ),
+    );
 
     // Driver location marker (shown to user)
     if (!widget.isDriver && req.driverLat != null && req.driverLng != null) {
-      markers.add(Marker(
-        markerId: const MarkerId('driver'),
-        position: LatLng(req.driverLat!, req.driverLng!),
-        infoWindow: InfoWindow(title: 'Driver: ${req.driverName ?? "Driver"}'),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
-      ));
+      markers.add(
+        Marker(
+          markerId: const MarkerId('driver'),
+          position: LatLng(req.driverLat!, req.driverLng!),
+          infoWindow: InfoWindow(
+            title: 'Driver: ${req.driverName ?? "Driver"}',
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueOrange,
+          ),
+        ),
+      );
     }
 
     return markers;
@@ -144,7 +195,8 @@ class _TrackingPageState extends State<TrackingPage> {
     final req = _request;
     final isCompleted = req?.status == RequestStatus.completed;
     final isCancelled = req?.status == RequestStatus.cancelled;
-    final isActive = req?.status == RequestStatus.accepted ||
+    final isActive =
+        req?.status == RequestStatus.accepted ||
         req?.status == RequestStatus.enRoute ||
         req?.status == RequestStatus.arrived;
 
@@ -169,10 +221,16 @@ class _TrackingPageState extends State<TrackingPage> {
                 ),
               ),
               backgroundColor: AppColors.primary,
-              icon: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.white),
+              icon: const Icon(
+                Icons.chat_bubble_outline_rounded,
+                color: Colors.white,
+              ),
               label: Text(
                 'Chat',
-                style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600),
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             )
           : null,
@@ -181,10 +239,15 @@ class _TrackingPageState extends State<TrackingPage> {
           // Map
           GoogleMap(
             initialCameraPosition: CameraPosition(
-              target: req != null ? LatLng(req.pickupLat, req.pickupLng) : _defaultCenter,
+              target: req != null
+                  ? LatLng(req.pickupLat, req.pickupLng)
+                  : _defaultCenter,
               zoom: 14.5,
             ),
-            onMapCreated: (c) { _mapController = c; _animateToRelevantPin(); },
+            onMapCreated: (c) {
+              _mapController = c;
+              _animateToRelevantPin();
+            },
             markers: _markers(),
             polylines: _routePolylines,
             zoomControlsEnabled: false,
@@ -193,21 +256,33 @@ class _TrackingPageState extends State<TrackingPage> {
 
           // Bottom info sheet
           Positioned(
-            left: 0, right: 0, bottom: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
             child: Container(
               decoration: const BoxDecoration(
                 color: AppColors.white,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                boxShadow: [BoxShadow(color: Color(0x18000000), blurRadius: 20)],
+                boxShadow: [
+                  BoxShadow(color: Color(0x18000000), blurRadius: 20),
+                ],
               ),
               padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
               child: req == null
-                  ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.primary,
+                      ),
+                    )
                   : isCompleted
-                      ? _CompletedBanner(req: req)
-                      : isCancelled
-                          ? _CancelledBanner()
-                          : _StatusInfo(req: req, isDriver: widget.isDriver),
+                  ? _CompletedBanner(req: req)
+                  : isCancelled
+                  ? _CancelledBanner()
+                  : _StatusInfo(
+                      req: req,
+                      isDriver: widget.isDriver,
+                      nearbyDriverCount: _nearbyDriverCount,
+                    ),
             ),
           ),
         ],
@@ -219,9 +294,14 @@ class _TrackingPageState extends State<TrackingPage> {
 // ── Status info sheet ─────────────────────────────────────────────────────────
 
 class _StatusInfo extends StatelessWidget {
-  const _StatusInfo({required this.req, required this.isDriver});
+  const _StatusInfo({
+    required this.req,
+    required this.isDriver,
+    required this.nearbyDriverCount,
+  });
   final AmbulanceRequest req;
   final bool isDriver;
+  final int nearbyDriverCount;
 
   @override
   Widget build(BuildContext context) {
@@ -236,30 +316,86 @@ class _StatusInfo extends StatelessWidget {
             color: AppColors.primaryLight,
             borderRadius: BorderRadius.circular(20),
           ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            const SizedBox(
-              width: 10, height: 10,
-              child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
-            ),
-            const SizedBox(width: 8),
-            Text(req.status.label, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.primary)),
-          ]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 10,
+                height: 10,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                req.status.label,
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
 
+        if (!isDriver && req.status == RequestStatus.pending) ...[
+          Text(
+            '$nearbyDriverCount nearby ambulance${nearbyDriverCount == 1 ? '' : 's'} notified',
+            style: GoogleFonts.poppins(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.primary,
+            ),
+          ),
+          Text(
+            'Searching within ${RequestService.dispatchRadiusKm(req.createdAt).toStringAsFixed(0)} km. '
+            'The search expands automatically.',
+            style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey),
+          ),
+          const SizedBox(height: 14),
+        ],
+
         if (!isDriver && req.driverName != null) ...[
-          Text('Your driver', style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey)),
-          Text(req.driverName!, style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+          Text(
+            'Your driver',
+            style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey),
+          ),
+          Text(
+            req.driverName!,
+            style: GoogleFonts.poppins(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textDark,
+            ),
+          ),
           const SizedBox(height: 4),
-          Text(req.driverPhone ?? '', style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey)),
+          Text(
+            req.driverPhone ?? '',
+            style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
+          ),
           const SizedBox(height: 16),
         ],
 
-        _TripRow(icon: Icons.my_location_rounded, label: 'Pickup', value: req.pickupAddress),
+        _TripRow(
+          icon: Icons.my_location_rounded,
+          label: 'Pickup',
+          value: req.pickupAddress,
+        ),
         const SizedBox(height: 8),
-        _TripRow(icon: Icons.flag_rounded, label: 'Destination', value: req.destinationAddress),
+        _TripRow(
+          icon: Icons.flag_rounded,
+          label: 'Destination',
+          value: req.destinationAddress,
+        ),
         const SizedBox(height: 8),
-        _TripRow(icon: Icons.payments_rounded, label: 'Fare', value: '৳${req.estimatedFare}'),
+        _TripRow(
+          icon: Icons.payments_rounded,
+          label: 'Fare',
+          value: '৳${req.estimatedFare}',
+        ),
         if (isDriver) ...[
           const SizedBox(height: 14),
           SizedBox(
@@ -268,13 +404,15 @@ class _StatusInfo extends StatelessWidget {
               onPressed: () async {
                 final opened =
                     await DeepLinkNavigationService.startGoogleNavigation(
-                  destinationLatitude: req.destinationLat,
-                  destinationLongitude: req.destinationLng,
-                );
+                      destinationLatitude: req.destinationLat,
+                      destinationLongitude: req.destinationLng,
+                    );
                 if (!opened && context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Google Maps is not available on this device.'),
+                      content: Text(
+                        'Google Maps is not available on this device.',
+                      ),
                     ),
                   );
                 }
@@ -295,47 +433,92 @@ class _CompletedBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.check_circle_rounded, color: AppColors.success, size: 52),
-          const SizedBox(height: 12),
-          Text('Trip Completed!', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-          const SizedBox(height: 4),
-          Text('Total fare: ৳${req.estimatedFare}', style: GoogleFonts.poppins(fontSize: 15, color: AppColors.textGrey)),
-          const SizedBox(height: 16),
-          Text('Returning in a moment…', style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textLight)),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      const Icon(
+        Icons.check_circle_rounded,
+        color: AppColors.success,
+        size: 52,
+      ),
+      const SizedBox(height: 12),
+      Text(
+        'Trip Completed!',
+        style: GoogleFonts.poppins(
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textDark,
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        'Total fare: ৳${req.estimatedFare}',
+        style: GoogleFonts.poppins(fontSize: 15, color: AppColors.textGrey),
+      ),
+      const SizedBox(height: 16),
+      Text(
+        'Returning in a moment…',
+        style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textLight),
+      ),
+    ],
+  );
 }
 
 class _CancelledBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.cancel_rounded, color: AppColors.warning, size: 52),
-          const SizedBox(height: 12),
-          Text('Trip Cancelled', style: GoogleFonts.poppins(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-          const SizedBox(height: 4),
-          Text('The request was cancelled.', style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey)),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      const Icon(Icons.cancel_rounded, color: AppColors.warning, size: 52),
+      const SizedBox(height: 12),
+      Text(
+        'Trip Cancelled',
+        style: GoogleFonts.poppins(
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+          color: AppColors.textDark,
+        ),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        'The request was cancelled.',
+        style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey),
+      ),
+    ],
+  );
 }
 
 class _TripRow extends StatelessWidget {
-  const _TripRow({required this.icon, required this.label, required this.value});
+  const _TripRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
   final IconData icon;
   final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) => Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 16, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Text('$label  ', style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey)),
-          Expanded(child: Text(value, style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark), maxLines: 2, overflow: TextOverflow.ellipsis)),
-        ],
-      );
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Icon(icon, size: 16, color: AppColors.primary),
+      const SizedBox(width: 8),
+      Text(
+        '$label  ',
+        style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey),
+      ),
+      Expanded(
+        child: Text(
+          value,
+          style: GoogleFonts.poppins(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textDark,
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    ],
+  );
 }

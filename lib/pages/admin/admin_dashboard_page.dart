@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:velocity_x/velocity_x.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
+
 import '../../constants/colors.dart';
 import '../../services/admin_service.dart';
 import '../traffic_light_control_page.dart';
@@ -313,8 +314,12 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           28.heightBox,
           // -- Traffic Light quick-access card -----------------------------
           GestureDetector(
-            onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const TrafficLightControlPage())),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const TrafficLightControlPage(),
+              ),
+            ),
             child: Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -324,10 +329,13 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(16),
-                boxShadow: [BoxShadow(
-                  color: Color(0x591565C0),
-                  blurRadius: 12, offset: Offset(0, 4),
-                )],
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x591565C0),
+                    blurRadius: 12,
+                    offset: Offset(0, 4),
+                  ),
+                ],
               ),
               child: Row(
                 children: [
@@ -337,21 +345,40 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                       color: Color(0x33FFFFFF),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.traffic_rounded, color: Colors.white, size: 26),
+                    child: const Icon(
+                      Icons.traffic_rounded,
+                      color: Colors.white,
+                      size: 26,
+                    ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Traffic Light Control',
-                            style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 15, color: Colors.white)),
-                        Text('Traffic Police Only • Passcode Protected',
-                            style: GoogleFonts.poppins(fontSize: 12, color: Color(0xCCFFFFFF))),
+                        Text(
+                          'Traffic Light Control',
+                          style: GoogleFonts.poppins(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Text(
+                          'Traffic Police Only - Passcode Protected',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Color(0xCCFFFFFF),
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                  const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 16),
+                  const Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    color: Colors.white,
+                    size: 16,
+                  ),
                 ],
               ),
             ),
@@ -431,14 +458,16 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
       ),
     ];
 
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      crossAxisSpacing: 16,
-      mainAxisSpacing: 16,
-      childAspectRatio: 1.4,
-      children: cards.map((c) => _buildStatCard(c)).toList(),
+    return LayoutBuilder(
+      builder: (context, constraints) => GridView.count(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        crossAxisCount: constraints.maxWidth >= 700 ? 3 : 2,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+        childAspectRatio: constraints.maxWidth >= 700 ? 1.8 : 1.35,
+        children: cards.map(_buildStatCard).toList(),
+      ),
     );
   }
 
@@ -564,8 +593,11 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
       ),
       child: Row(
         children: [
-          const Icon(Icons.check_circle_rounded,
-              color: AppColors.success, size: 32),
+          const Icon(
+            Icons.check_circle_rounded,
+            color: AppColors.success,
+            size: 32,
+          ),
           16.widthBox,
           Expanded(
             child: Column(
@@ -599,8 +631,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(
           'Logout',
           style: GoogleFonts.poppins(fontWeight: FontWeight.w700),
@@ -625,7 +656,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: Text('Logout', style: GoogleFonts.poppins()),
           ),
@@ -683,10 +715,7 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.cardBorder),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 4,
-          ),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 4),
         ],
       ),
       child: Row(
@@ -738,15 +767,23 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
                 _iconAction(
                   icon: Icons.check_circle_rounded,
                   color: AppColors.success,
-                  onTap: () => _doAction(() => widget.adminService
-                      .verifyDriver(widget.uid, name: name)),
+                  onTap: () => _doAction(
+                    () => widget.adminService.verifyDriver(
+                      widget.uid,
+                      name: name,
+                    ),
+                  ),
                 ),
                 6.widthBox,
                 _iconAction(
                   icon: Icons.cancel_rounded,
                   color: Colors.red,
-                  onTap: () => _doAction(() => widget.adminService
-                      .rejectDriver(widget.uid, name: name)),
+                  onTap: () => _doAction(
+                    () => widget.adminService.rejectDriver(
+                      widget.uid,
+                      name: name,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -766,9 +803,7 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
       style: IconButton.styleFrom(
         backgroundColor: color,
         foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
@@ -822,10 +857,7 @@ class _PendingHospitalTileState extends State<_PendingHospitalTile> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.cardBorder),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 4,
-          ),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 4),
         ],
       ),
       child: Row(
@@ -879,15 +911,23 @@ class _PendingHospitalTileState extends State<_PendingHospitalTile> {
                 _iconAction(
                   icon: Icons.check_circle_rounded,
                   color: AppColors.success,
-                  onTap: () => _doAction(() => widget.adminService
-                      .approveHospital(widget.id, name: name)),
+                  onTap: () => _doAction(
+                    () => widget.adminService.approveHospital(
+                      widget.id,
+                      name: name,
+                    ),
+                  ),
                 ),
                 6.widthBox,
                 _iconAction(
                   icon: Icons.cancel_rounded,
                   color: Colors.red,
-                  onTap: () => _doAction(() => widget.adminService
-                      .rejectHospital(widget.id, name: name)),
+                  onTap: () => _doAction(
+                    () => widget.adminService.rejectHospital(
+                      widget.id,
+                      name: name,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -907,9 +947,7 @@ class _PendingHospitalTileState extends State<_PendingHospitalTile> {
       style: IconButton.styleFrom(
         backgroundColor: color,
         foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ),
     );
   }
