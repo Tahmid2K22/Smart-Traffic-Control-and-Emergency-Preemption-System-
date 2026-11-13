@@ -75,6 +75,83 @@ class MapSearchService {
     required LatLng destination,
   }) async {
     final uri = Uri.https(
+      'router.project-osrm.org',
+      '/route/v1/driving/${start.longitude},${start.latitude};'
+          '${destination.longitude},${destination.latitude}',
+      <String, String>{
+        'overview': 'full',
+        'geometries': 'geojson',
+      },
+    );
+    final response = await http.get(uri, headers: {'User-Agent': _userAgent});
+    if (response.statusCode != 200) {
+      throw HttpException('Routing service returned ${response.statusCode}.');
+    }
+
+    final data = jsonDecode(response.body);
+    if (data is! Map<String, dynamic> || data['code'] != 'Ok') {
+      final code = data is Map<String, dynamic>
+          ? data['code']?.toString()
+          : null;
+      throw FormatException(
+        'Routing service returned no route${code == null ? '' : ' ($code)'}.',
+      );
+    }
+
+    final routes = data['routes'];
+    final route = routes is List && routes.isNotEmpty
+        ? routes.first as Map<String, dynamic>?
+        : null;
+    final geometry = route?['geometry'];
+    final coordinates = geometry is Map<String, dynamic>
+        ? geometry['coordinates']
+        : null;
+    final distanceInMeters = (route?['distance'] as num?)?.toDouble();
+    final durationInSeconds = (route?['duration'] as num?)?.toDouble();
+    if (coordinates is! List ||
+        distanceInMeters == null ||
+        durationInSeconds == null) {
+      throw const FormatException('Routing service returned an incomplete route.');
+    }
+
+    final points = coordinates
+        .whereType<List>()
+        .where((point) => point.length >= 2)
+        .map((point) => LatLng(
+              (point[1] as num).toDouble(),
+              (point[0] as num).toDouble(),
+            ))
+        .toList();
+    if (points.isEmpty) {
+      throw const FormatException('Routing service returned no route geometry.');
+    }
+
+    var durationMinutes = (durationInSeconds / 60).round();
+    try {
+      durationMinutes = await _getGoogleDuration(
+        start: start,
+        destination: destination,
+      );
+    } on HttpException {
+      // Keep the working route estimate when Google Directions is unavailable.
+    } on FormatException {
+      // Keep the working route estimate when Google returns an incomplete result.
+    } on StateError {
+      // Keep the working route estimate when the optional Google key is unavailable.
+    }
+
+    return DrivingRoute(
+      points: points,
+      distanceKm: distanceInMeters / 1000,
+      durationMinutes: durationMinutes,
+    );
+  }
+
+  Future<int> _getGoogleDuration({
+    required LatLng start,
+    required LatLng destination,
+  }) async {
+    final uri = Uri.https(
       'maps.googleapis.com',
       '/maps/api/directions/json',
       <String, String>{
@@ -89,81 +166,31 @@ class MapSearchService {
     if (response.statusCode != 200) {
       throw HttpException('Google Directions returned ${response.statusCode}.');
     }
-
     final data = jsonDecode(response.body);
-    final routes = data is Map<String, dynamic> ? data['routes'] : null;
-    if (routes is! List ||
-        routes.isEmpty ||
-        routes.first is! Map<String, dynamic>) {
-      throw const FormatException('Google Directions returned no routes.');
+    if (data is! Map<String, dynamic> || data['status'] != 'OK') {
+      throw const FormatException('Google Directions returned no duration.');
     }
-    final route = routes.first as Map<String, dynamic>;
-    final overview = route['overview_polyline'];
-    final encoded = overview is Map<String, dynamic>
-        ? overview['points']?.toString()
+    final routes = data['routes'];
+    final legs = routes is List &&
+            routes.isNotEmpty &&
+            routes.first is Map<String, dynamic>
+        ? (routes.first as Map<String, dynamic>)['legs']
         : null;
-    final legs = route['legs'];
-    final leg = legs is List && legs.isNotEmpty && legs.first is Map<String, dynamic>
-        ? legs.first as Map<String, dynamic>
+    final duration = legs is List &&
+            legs.isNotEmpty &&
+            legs.first is Map<String, dynamic>
+        ? (legs.first as Map<String, dynamic>)['duration']
         : null;
-    final distance = leg?['distance'];
-    final duration = leg?['duration'];
-    final distanceInMeters = distance is Map<String, dynamic>
-        ? (distance['value'] as num?)?.toDouble()
-        : null;
-    final durationInSeconds = duration is Map<String, dynamic>
+    final seconds = duration is Map<String, dynamic>
         ? (duration['value'] as num?)?.toDouble()
         : null;
-    if (encoded == null ||
-        distanceInMeters == null ||
-        durationInSeconds == null) {
-      throw const FormatException('Google Directions route is incomplete.');
+    if (seconds == null) {
+      throw const FormatException('Google Directions returned no duration.');
     }
-
-    final points = _decodePolyline(encoded);
-    if (points.isEmpty) {
-      throw const FormatException('Google Directions route has no geometry.');
-    }
-
-    return DrivingRoute(
-      points: points,
-      distanceKm: distanceInMeters / 1000,
-      durationMinutes: (durationInSeconds / 60).round(),
-    );
+    return (seconds / 60).ceil();
   }
 
   void dispose() {}
-
-  List<LatLng> _decodePolyline(String encoded) {
-    final points = <LatLng>[];
-    var index = 0;
-    var latitude = 0;
-    var longitude = 0;
-    while (index < encoded.length) {
-      var shift = 0;
-      var result = 0;
-      int byte;
-      do {
-        if (index >= encoded.length) return points;
-        byte = encoded.codeUnitAt(index++) - 63;
-        result |= (byte & 0x1f) << shift;
-        shift += 5;
-      } while (byte >= 0x20);
-      latitude += (result & 1) != 0 ? ~(result >> 1) : result >> 1;
-
-      shift = 0;
-      result = 0;
-      do {
-        if (index >= encoded.length) return points;
-        byte = encoded.codeUnitAt(index++) - 63;
-        result |= (byte & 0x1f) << shift;
-        shift += 5;
-      } while (byte >= 0x20);
-      longitude += (result & 1) != 0 ? ~(result >> 1) : result >> 1;
-      points.add(LatLng(latitude / 100000, longitude / 100000));
-    }
-    return points;
-  }
 }
 
 class HttpException implements Exception {

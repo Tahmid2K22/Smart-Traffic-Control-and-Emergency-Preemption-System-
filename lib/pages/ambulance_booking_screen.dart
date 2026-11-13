@@ -29,7 +29,7 @@ class AmbulanceBookingScreen extends StatefulWidget {
 enum _BookingMode { planning, pickingDestination, pickingPickup }
 
 class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
-  static const _defaultCenter = LatLng(23.8103, 90.4125);
+  static const _defaultCenter = LatLng(22.8996, 89.5023);
 
   final _pickupController = TextEditingController(
     text: 'Detecting current location...',
@@ -65,7 +65,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       'Basic Ambulance',
       'Standard transport',
       'First aid, stretcher',
-      '4 min',
       800,
       35,
       Icons.local_shipping_rounded,
@@ -75,7 +74,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       'ICU Ambulance',
       'Critical care equipped',
       'Ventilator, monitor, nurse',
-      '7 min',
       1800,
       55,
       Icons.monitor_heart_rounded,
@@ -85,7 +83,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       'Oxygen / Neonatal',
       'Specialized transport',
       'Oxygen, incubator, specialist',
-      '9 min',
       2200,
       65,
       Icons.air_rounded,
@@ -359,7 +356,11 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     final destination = _destination;
     if (pickup == null || destination == null) return;
     final requestId = ++_routeRequestId;
-    setState(() => _isRouting = true);
+    setState(() {
+      _isRouting = true;
+      _routeDistanceKm = 0;
+      _routeDurationMinutes = 0;
+    });
     try {
       final route = await _mapSearchService.getDrivingRoute(
         start: pickup,
@@ -484,8 +485,10 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
 
   double get _distanceKm => _routeDistanceKm;
 
-  int get _estimatedFare =>
-      (500 + (_distanceKm * 40) + (_routeDurationMinutes * 5)).round();
+  int get _estimatedFare {
+    final tier = _tiers[_selectedAmbulance];
+    return (tier.baseFare + (_distanceKm * tier.perKm)).round();
+  }
 
   Set<Marker> _markers() {
     final markers = <Marker>{};
@@ -861,6 +864,7 @@ class _TripPlanningSheet extends StatelessWidget {
               child: _TierCard(
                 tier: tiers[index],
                 selected: index == selectedIndex,
+                durationMinutes: durationMinutes,
                 onTap: () => onSelected(index),
               ),
             ),
@@ -1115,10 +1119,12 @@ class _TierCard extends StatelessWidget {
   const _TierCard({
     required this.tier,
     required this.selected,
+    required this.durationMinutes,
     required this.onTap,
   });
   final _AmbulanceTier tier;
   final bool selected;
+  final int durationMinutes;
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => InkWell(
@@ -1169,7 +1175,7 @@ class _TierCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                tier.eta,
+                durationMinutes > 0 ? '$durationMinutes min' : 'Set route',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   color: tier.color,
@@ -1261,7 +1267,6 @@ class _AmbulanceTier {
     this.name,
     this.subtitle,
     this.equipment,
-    this.eta,
     this.baseFare,
     this.perKm,
     this.icon,
@@ -1270,7 +1275,6 @@ class _AmbulanceTier {
   final String name;
   final String subtitle;
   final String equipment;
-  final String eta;
   final int baseFare;
   final int perKm;
   final IconData icon;

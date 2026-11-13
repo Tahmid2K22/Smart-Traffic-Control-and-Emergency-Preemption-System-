@@ -41,8 +41,9 @@ class _TrackingPageState extends State<TrackingPage> {
   final _mapSearchService = MapSearchService();
   Set<Polyline> _routePolylines = const {};
   int _nearbyDriverCount = 0;
+  bool _updatingStatus = false;
 
-  static const _defaultCenter = LatLng(23.8103, 90.4125);
+  static const _defaultCenter = LatLng(22.8996, 89.5023);
 
   @override
   void initState() {
@@ -144,8 +145,29 @@ class _TrackingPageState extends State<TrackingPage> {
       // User tracks the driver
       target = LatLng(req.driverLat!, req.driverLng!);
     }
+
     if (target != null) {
       _mapController!.animateCamera(CameraUpdate.newLatLng(target));
+    }
+  }
+
+  Future<void> _cancelTrip() async {
+    final request = _request;
+    if (request == null || _updatingStatus) return;
+    setState(() => _updatingStatus = true);
+    try {
+      await RequestService.cancelRequest(
+        request.id,
+        driverId: widget.isDriver ? widget.driverId : null,
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not cancel trip: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _updatingStatus = false);
     }
   }
 
@@ -300,6 +322,8 @@ class _TrackingPageState extends State<TrackingPage> {
                       req: req,
                       isDriver: widget.isDriver,
                       nearbyDriverCount: _nearbyDriverCount,
+                      updatingStatus: _updatingStatus,
+                      onCancel: _cancelTrip,
                     ),
             ),
           ),
@@ -316,10 +340,14 @@ class _StatusInfo extends StatelessWidget {
     required this.req,
     required this.isDriver,
     required this.nearbyDriverCount,
+    required this.updatingStatus,
+    required this.onCancel,
   });
   final AmbulanceRequest req;
   final bool isDriver;
   final int nearbyDriverCount;
+  final bool updatingStatus;
+  final VoidCallback onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -374,6 +402,26 @@ class _StatusInfo extends StatelessWidget {
             style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey),
           ),
           const SizedBox(height: 14),
+        ],
+
+        if (!isDriver &&
+            (req.status == RequestStatus.pending ||
+                req.status == RequestStatus.accepted ||
+                req.status == RequestStatus.enRoute ||
+                req.status == RequestStatus.arrived)) ...[
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: updatingStatus ? null : onCancel,
+              icon: const Icon(Icons.cancel_outlined),
+              label: const Text('Cancel trip'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.warning,
+                side: const BorderSide(color: AppColors.warning),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
         ],
 
         if (!isDriver && req.driverName != null) ...[
@@ -437,6 +485,19 @@ class _StatusInfo extends StatelessWidget {
               },
               icon: const Icon(Icons.navigation_rounded),
               label: const Text('Start Google Maps navigation'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: updatingStatus ? null : onCancel,
+              icon: const Icon(Icons.cancel_outlined),
+              label: const Text('Cancel trip'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.warning,
+                side: const BorderSide(color: AppColors.warning),
+              ),
             ),
           ),
         ],
