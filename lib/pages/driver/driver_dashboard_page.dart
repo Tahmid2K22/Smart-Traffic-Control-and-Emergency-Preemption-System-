@@ -266,6 +266,34 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     } catch (e) {
       if (mounted) _showSnack('Failed to accept request. Try again.');
     }
+
+  }
+
+  Future<void> _markArrived(AmbulanceRequest request) async {
+    try {
+      await RequestService.markArrived(request.id);
+    } catch (error) {
+      if (mounted) _showSnack('Could not update trip: $error');
+    }
+  }
+
+  Future<void> _completeRequest(AmbulanceRequest request) async {
+    try {
+      await RequestService.completeRequest(
+        requestId: request.id,
+        driverId: _driver.id,
+      );
+    } catch (error) {
+      if (mounted) _showSnack('Could not complete trip: $error');
+    }
+  }
+
+  Future<void> _cancelRequest(AmbulanceRequest request) async {
+    try {
+      await RequestService.cancelRequest(request.id, driverId: _driver.id);
+    } catch (error) {
+      if (mounted) _showSnack('Could not cancel trip: $error');
+    }
   }
 
   void _rejectRequest(AmbulanceRequest request) {
@@ -674,7 +702,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => RequestService.markArrived(req.id),
+                  onPressed: () => _markArrived(req),
                   icon: const Icon(Icons.place_rounded),
                   label: Text(
                     'Arrived',
@@ -696,10 +724,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
               const SizedBox(width: 12),
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: () => RequestService.completeRequest(
-                    requestId: req.id,
-                    driverId: _driver.id,
-                  ),
+                  onPressed: () => _completeRequest(req),
                   icon: const Icon(Icons.check_rounded),
                   label: Text(
                     'Complete',
@@ -715,6 +740,23 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _cancelRequest(req),
+              icon: const Icon(Icons.cancel_outlined),
+              label: const Text('Cancel trip'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.deepOrange,
+                side: const BorderSide(color: Colors.deepOrange),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            ),
           ),
           const SizedBox(height: 12),
           Row(

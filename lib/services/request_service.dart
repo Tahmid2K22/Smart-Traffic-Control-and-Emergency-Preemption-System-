@@ -150,13 +150,36 @@ class RequestService {
         .toList();
   }
 
-  /// Cancels a pending request (user side).
-  static Future<void> cancelRequest(String requestId) async {
-    if (!supabaseReady) return;
-    await sb
+  /// Cancels a request before it is completed.
+  static Future<void> cancelRequest(
+    String requestId, {
+    String? driverId,
+  }) async {
+    if (!supabaseReady) {
+      throw StateError('Supabase is not initialised.');
+    }
+    final cancelled = await sb
         .from(SupabaseTables.requests)
         .update({'status': RequestStatus.cancelled.toDbString()})
-        .eq('id', requestId);
+        .eq('id', requestId)
+        .inFilter('status', [
+          RequestStatus.pending.toDbString(),
+          RequestStatus.accepted.toDbString(),
+          RequestStatus.enRoute.toDbString(),
+          RequestStatus.arrived.toDbString(),
+        ])
+        .select('id');
+    if (cancelled.isEmpty) {
+      throw StateError('This trip is no longer available to cancel.');
+    }
+    final driverQuery = sb
+        .from(SupabaseTables.drivers)
+        .update({'current_request_id': null});
+    if (driverId == null) {
+      await driverQuery.eq('current_request_id', requestId);
+    } else {
+      await driverQuery.eq('id', driverId);
+    }
   }
 
   // ── Driver accept / reject / complete ───────────────────────────────────────
@@ -190,11 +213,21 @@ class RequestService {
 
   /// Driver marks themselves as arrived at pickup.
   static Future<void> markArrived(String requestId) async {
-    if (!supabaseReady) return;
-    await sb
+    if (!supabaseReady) {
+      throw StateError('Supabase is not initialised.');
+    }
+    final updated = await sb
         .from(SupabaseTables.requests)
         .update({'status': RequestStatus.arrived.toDbString()})
-        .eq('id', requestId);
+        .eq('id', requestId)
+        .inFilter('status', [
+          RequestStatus.accepted.toDbString(),
+          RequestStatus.enRoute.toDbString(),
+        ])
+        .select('id');
+    if (updated.isEmpty) {
+      throw StateError('The trip cannot be marked arrived in its current state.');
+    }
   }
 
   /// Driver marks the trip as completed.
@@ -202,14 +235,25 @@ class RequestService {
     required String requestId,
     required String driverId,
   }) async {
-    if (!supabaseReady) return;
-    await sb
+    if (!supabaseReady) {
+      throw StateError('Supabase is not initialised.');
+    }
+    final updated = await sb
         .from(SupabaseTables.requests)
         .update({
           'status': RequestStatus.completed.toDbString(),
           'completed_at': DateTime.now().toIso8601String(),
         })
-        .eq('id', requestId);
+        .eq('id', requestId)
+        .inFilter('status', [
+          RequestStatus.accepted.toDbString(),
+          RequestStatus.enRoute.toDbString(),
+          RequestStatus.arrived.toDbString(),
+        ])
+        .select('id');
+    if (updated.isEmpty) {
+      throw StateError('The trip cannot be completed in its current state.');
+    }
 
     await sb
         .from(SupabaseTables.drivers)
