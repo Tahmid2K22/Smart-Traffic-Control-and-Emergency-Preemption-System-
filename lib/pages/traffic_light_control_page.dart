@@ -1,979 +1,642 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
-import '../../constants/colors.dart';
-import '../../services/ble_traffic_service.dart';
+
+import '../services/ble_traffic_service.dart';
 
 class TrafficLightControlPage extends StatefulWidget {
-  const TrafficLightControlPage({super.key});
+  const TrafficLightControlPage({super.key, this.service});
+
+  final BleTrafficService? service;
 
   @override
-  State<TrafficLightControlPage> createState() => _TrafficLightControlPageState();
+  State<TrafficLightControlPage> createState() =>
+      _TrafficLightControlPageState();
 }
 
-class _TrafficLightControlPageState extends State<TrafficLightControlPage>
-    with TickerProviderStateMixin {
-
-  // ── State ──────────────────────────────────────────────────────────────────
-  final _ble = BleTrafficService.instance;
+class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
+  late final BleTrafficService _ble;
+  TrafficLightStatus? _status;
+  Map<String, dynamic>? _authorization;
   List<TrafficLightDevice> _devices = [];
-  TrafficLightDevice?      _selected;
-  TrafficLightStatus?      _status;
-
-  Map<String, dynamic>?    _authStatus;
-  bool _authChecking  = true;
-
-  bool _scanning      = false;
-  bool _connecting    = false;
-  bool _sending       = false;
-
-  // Auto-mode sliders
-  double _greenSec  = 30;
-  double _yellowSec = 5;
-  double _redSec    = 30;
-  bool   _autoMode  = false;
-
+  TrafficLightDevice? _selected;
+  bool _checking = true;
+  bool _scanning = false;
+  bool _connecting = false;
+  bool _sending = false;
+  bool _refreshing = false;
+  int _greenSec = 30;
+  int _yellowSec = 5;
+  int _allRedSec = 2;
+  int _ticks = 0;
+  String? _commandNotice;
+  Timer? _refreshTimer;
+  Timer? _scanTimer;
   StreamSubscription<List<TrafficLightDevice>>? _scanSub;
-  StreamSubscription<TrafficLightStatus>?       _statusSub;
+  StreamSubscription<TrafficLightStatus>? _statusSub;
+  StreamSubscription<bool>? _connectionSub;
 
-  // Glow animations
-  late AnimationController _glowCtrl;
-  late Animation<double>   _glowAnim;
+  bool get _authorized => _authorization?['isAuthorized'] == true;
+  bool get _ready =>
+      _authorized && _ble.isReady && _status != null && !_refreshing;
 
   @override
   void initState() {
     super.initState();
-    _checkAuthorization();
-
-    _glowCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..repeat(reverse: true);
-    _glowAnim = Tween(begin: 0.5, end: 1.0).animate(
-      CurvedAnimation(parent: _glowCtrl, curve: Curves.easeInOut),
+    _ble = widget.service ?? BleTrafficService.instance;
+    _status = _ble.isConnected ? _ble.latestStatus : null;
+    _statusSub = _ble.statusStream.listen(
+      (status) {
+        if (mounted && _ble.isConnected) setState(() => _status = status);
+      },
+      onError: (Object error) {
+        if (mounted) setState(() => _status = null);
+      },
     );
-
-    _statusSub = _ble.statusStream.listen((s) {
-      if (mounted) setState(() => _status = s);
+    _connectionSub = _ble.connectionStream.listen((connected) {
+      if (!mounted) return;
+      setState(() {
+        _status = connected ? _ble.latestStatus : null;
+        _commandNotice = null;
+        if (!connected) _selected = null;
+      });
+      if (connected) unawaited(_refreshStatus(silent: true));
     });
+    _refreshTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      // Readiness expires even when the device stops sending notifications.
+      setState(() {
+        if (!_ble.isConnected) _status = null;
+      });
+      if (++_ticks % 5 == 0 && !_ble.isReady) {
+        unawaited(_refreshStatus(silent: true));
+      }
+    });
+    unawaited(_checkAuthorization());
   }
 
   @override
   void dispose() {
-    _glowCtrl.dispose();
-    _scanSub?.cancel();
-    _statusSub?.cancel();
+    _refreshTimer?.cancel();
+    _scanTimer?.cancel();
+    unawaited(_scanSub?.cancel());
+    unawaited(_statusSub?.cancel());
+    unawaited(_connectionSub?.cancel());
+    // The dashboard owns auto-connect and the shared connection, not this page.
     super.dispose();
   }
 
-  // ── Authorization ──────────────────────────────────────────────────────────
   Future<void> _checkAuthorization() async {
-    setState(() => _authChecking = true);
-    final status = await _ble.checkUserAuthorization();
-    if (mounted) {
+    setState(() => _checking = true);
+    try {
+      final result = await _ble.checkUserAuthorization();
+      if (!mounted) return;
+      setState(() => _authorization = result);
+      if (_authorized) unawaited(_refreshStatus(silent: true));
+    } catch (error) {
+      if (!mounted) return;
       setState(() {
-        _authStatus = status;
-        _authChecking = false;
+        _authorization = {'isAuthorized': false, 'reason': '$error'};
       });
+    } finally {
+      if (mounted) setState(() => _checking = false);
     }
   }
 
-  // ── Scanning ───────────────────────────────────────────────────────────────
   Future<void> _startScan() async {
-    setState(() { _scanning = true; _devices = []; });
-    _scanSub?.cancel();
-    _scanSub = _ble.scan().listen(
-      (list) { if (mounted) setState(() => _devices = list); },
-      onDone: () { if (mounted) setState(() => _scanning = false); },
-    );
+    if (!_authorized || _scanning || _connecting) return;
+    setState(() {
+      _scanning = true;
+      _devices = [];
+    });
+    try {
+      if (!await _ble.requestPermissions()) {
+        throw StateError('Bluetooth permission is required to scan.');
+      }
+      if (!mounted) return;
+      await _scanSub?.cancel();
+      if (!mounted) return;
+      _scanSub = _ble.scan().listen(
+        (devices) {
+          if (mounted) setState(() => _devices = devices);
+        },
+        onError: (Object error) {
+          if (mounted) setState(() => _scanning = false);
+          _showMessage('Scan failed: $error');
+        },
+        onDone: () {
+          if (mounted) setState(() => _scanning = false);
+        },
+      );
+      _scanTimer?.cancel();
+      _scanTimer = Timer(const Duration(seconds: 10), _stopScan);
+    } catch (error) {
+      if (mounted) setState(() => _scanning = false);
+      _showMessage('Scan failed: $error');
+    }
   }
 
   Future<void> _stopScan() async {
-    await _ble.stopScan();
-    _scanSub?.cancel();
-    setState(() => _scanning = false);
+    _scanTimer?.cancel();
+    await _scanSub?.cancel();
+    _scanSub = null;
+    try {
+      await _ble.stopScan();
+    } catch (error) {
+      _showMessage('Unable to stop scan: $error');
+    }
+    if (mounted) setState(() => _scanning = false);
   }
 
-  // ── Connection ─────────────────────────────────────────────────────────────
-  Future<void> _connect(TrafficLightDevice dev) async {
-    await _stopScan();
-    setState(() { _connecting = true; _selected = dev; });
+  Future<void> _connect(TrafficLightDevice device) async {
+    if (!_authorized || _connecting) return;
+    setState(() {
+      _connecting = true;
+      _selected = device;
+      _status = null;
+      _commandNotice = null;
+    });
     try {
-      await _ble.connect(dev.device);
-      if (mounted) setState(() { _connecting = false; });
-      _showSnack('✅ Connected & verified as Traffic Police!', AppColors.success);
-    } catch (e) {
-      if (mounted) setState(() { _connecting = false; _selected = null; });
-      _showSnack('❌ ${e.toString()}', AppColors.primary);
+      await _stopScan();
+      if (!mounted) return;
+      await _ble.connect(device.device);
+      if (!mounted) return;
+      setState(() => _status = _ble.latestStatus);
+      unawaited(_refreshStatus(silent: true));
+    } catch (error) {
+      _showMessage('Connection failed: $error');
+    } finally {
+      if (mounted) setState(() => _connecting = false);
     }
   }
 
   Future<void> _disconnect() async {
-    await _ble.disconnect();
-    if (mounted) setState(() { _selected = null; _status = null; _autoMode = false; });
+    try {
+      await _ble.disconnect();
+      if (mounted) {
+        setState(() {
+          _status = null;
+          _selected = null;
+          _commandNotice = null;
+        });
+      }
+    } catch (error) {
+      _showMessage('Disconnect failed: $error');
+    }
   }
 
-  // ── Commands ───────────────────────────────────────────────────────────────
-  Future<void> _sendLight(Future<void> Function() cmd) async {
-    setState(() => _sending = true);
+  Future<void> _refreshStatus({bool silent = false}) async {
+    if (!_authorized || !_ble.isConnected || _refreshing || _sending) {
+      return;
+    }
+    setState(() => _refreshing = true);
     try {
-      await cmd();
-    } catch (e) {
-      _showSnack('❌ ${e.toString()}', AppColors.primary);
+      await _ble.requestStatus();
+    } catch (error) {
+      if (!silent) _showMessage('Status refresh failed: $error');
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _send(Future<void> Function() command) async {
+    if (!_ready || _sending) return;
+    setState(() {
+      _sending = true;
+      _commandNotice = null;
+    });
+    try {
+      await command();
+      if (!mounted) return;
+      setState(() {
+        _commandNotice =
+            'Command accepted by controller. Waiting for reported state; '
+            'acceptance does not mean the transition is complete.';
+      });
+    } catch (error) {
+      _showMessage('Command failed: $error');
     } finally {
       if (mounted) setState(() => _sending = false);
     }
   }
 
-  Future<void> _applyAutoMode() async {
-    await _sendLight(() => _ble.setAutoMode(
-      greenSec:  _greenSec.round(),
-      yellowSec: _yellowSec.round(),
-      redSec:    _redSec.round(),
-    ));
-    _showSnack('⚙️ Auto cycle mode active', AppColors.infoBlue);
-  }
-
-  // ── UI helpers ─────────────────────────────────────────────────────────────
-  void _showSnack(String msg, Color color) {
+  void _showMessage(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: GoogleFonts.poppins(color: Colors.white)),
-      backgroundColor: color,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    ));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
+  String get _readinessMessage {
+    if (!_ble.isConnected) {
+      return 'Disconnected — scan and connect to a controller.';
+    }
+    if (!_ble.isAuthenticated) {
+      return 'Connected — waiting for controller authentication.';
+    }
+    if (_status == null) return 'Connected — waiting for device status.';
+    if (!_status!.supportsFourWay || _status!.version < 2) {
+      return 'Legacy firmware — four-way v2 firmware is required. Controls disabled.';
+    }
+    if (_status!.errorCode == 'unconfigured') {
+      return 'Controller unconfigured — it must be bound to your intersection. Controls disabled.';
+    }
+    if (_status!.intersectionId != _authorization?['intersectionId']) {
+      return 'Intersection mismatch — connect to your assigned controller. Controls disabled.';
+    }
+    if (!_status!.authOk) {
+      return 'Controller has not confirmed authorization. Controls disabled.';
+    }
+    if (!_ble.isReady) {
+      return 'Status stale or controller not ready. Controls disabled until a fresh, matching status arrives.';
+    }
+    return 'Ready — authenticated controller with fresh status for your intersection.';
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_authChecking) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
-          title: Text(
-            'Traffic Light Control',
-            style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: Colors.white),
-          ),
-        ),
-        body: const Center(
-          child: CircularProgressIndicator(color: AppColors.primary),
-        ),
-      );
-    }
-
-    final isAuthorized = _authStatus?['isAuthorized'] == true;
-    if (!isAuthorized) {
-      return Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
-          title: Text(
-            'Traffic Light Control',
-            style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: Colors.white),
-          ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-              tooltip: 'Re-check Authorization',
-              onPressed: _checkAuthorization,
-            ),
-          ],
-        ),
-        body: _buildUnauthorizedView(),
-      );
-    }
-
     return Scaffold(
-      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: Text(
-          'Traffic Light Control',
-          style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: Colors.white),
-        ),
+        title: const Text('Four-way signal control'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-            tooltip: 'Refresh Status',
-            onPressed: _checkAuthorization,
-          ),
-          if (_ble.isConnected)
+          if (_authorized && _ble.isConnected)
             IconButton(
-              icon: const Icon(Icons.bluetooth_disabled_rounded, color: Colors.white),
-              tooltip: 'Disconnect',
-              onPressed: _disconnect,
+              tooltip: 'Refresh device status',
+              onPressed: _refreshing || _sending
+                  ? null
+                  : () => _refreshStatus(),
+              icon: const Icon(Icons.refresh),
+            ),
+          if (_authorized && _ble.isConnected)
+            IconButton(
+              tooltip: 'Disconnect controller',
+              onPressed: _sending || _connecting ? null : _disconnect,
+              icon: const Icon(Icons.bluetooth_disabled),
             ),
         ],
       ),
-      body: _ble.isConnected ? _buildControlPanel() : _buildScanPanel(),
-    );
-  }
-
-  // ── Unauthorized View ──────────────────────────────────────────────────────
-  Widget _buildUnauthorizedView() {
-    final role = _authStatus?['role']?.toString() ?? 'user';
-    final isPending = role == 'traffic_police' && _authStatus?['isVerified'] != true;
-    final reason = _authStatus?['reason']?.toString() ?? 'Authorization required.';
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: isPending ? AppColors.warningLight : const Color(0xFFFFEBEE),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isPending ? Icons.pending_actions_rounded : Icons.gavel_rounded,
-                size: 64,
-                color: isPending ? AppColors.warning : AppColors.primary,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              isPending ? 'Traffic Police Pending Approval' : 'Authorization Required',
-              style: GoogleFonts.poppins(
-                fontSize: 20,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textDark,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              isPending
-                  ? 'Your Traffic Police registration is currently under review by an administrator.\n\nOnce approved by an Admin, you will be authorized to connect and control traffic light signals.'
-                  : 'Traffic light control is restricted strictly to verified Traffic Police officers.\n\nCurrent role: $role',
-              style: GoogleFonts.poppins(
-                fontSize: 14,
-                color: AppColors.textGrey,
-                height: 1.5,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.cardBorder),
-              ),
-              child: Text(
-                reason,
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: isPending ? AppColors.warning : AppColors.primary,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _checkAuthorization,
-                icon: const Icon(Icons.refresh_rounded),
-                label: Text(
-                  'Re-check Authorization',
-                  style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isPending ? AppColors.warning : AppColors.primary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── Scan panel ─────────────────────────────────────────────────────────────
-  Widget _buildScanPanel() {
-    return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Officer badge banner
-          if (_authStatus != null) _OfficerBadgeBanner(authStatus: _authStatus!),
-          const SizedBox(height: 14),
-
-          // Security info banner
-          _SecurityBanner(),
-          const SizedBox(height: 20),
-
-          // Scan button
-          SizedBox(
-            width: double.infinity,
-            child: _scanning
-                ? OutlinedButton.icon(
-                    onPressed: _stopScan,
-                    icon: const SizedBox(
-                      width: 16, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
-                    ),
-                    label: Text('Scanning for Signal Devices… (tap to stop)',
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      side: const BorderSide(color: AppColors.primary),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  )
-                : ElevatedButton.icon(
-                    onPressed: _startScan,
-                    icon: const Icon(Icons.bluetooth_searching_rounded),
-                    label: Text('Scan for ESP32 Traffic Light',
-                        style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    ),
-                  ),
-          ),
-          const SizedBox(height: 20),
-          if (_devices.isNotEmpty) ...[
-            Text('Nearby Signals',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 16, color: AppColors.textDark)),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView.separated(
-                itemCount: _devices.length,
-                separatorBuilder: (context, index) => const SizedBox(height: 10),
-                itemBuilder: (_, i) => _DeviceTile(
-                  device: _devices[i],
-                  isConnecting: _connecting && _selected?.device.remoteId == _devices[i].device.remoteId,
-                  onTap: () => _connect(_devices[i]),
-                ),
-              ),
-            ),
-          ] else if (_scanning)
-            Expanded(
-              child: Center(
+      body: _checking
+          ? const Center(child: CircularProgressIndicator())
+          : !_authorized
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.bluetooth_searching_rounded, size: 64, color: AppColors.textLight),
-                    const SizedBox(height: 16),
-                    Text('Searching for ESP32 traffic signals nearby…',
-                        style: GoogleFonts.poppins(color: AppColors.textGrey)),
+                    const Icon(Icons.lock, size: 48),
+                    const Text('Verified Traffic Police access required'),
+                    Text(
+                      _authorization?['reason']?.toString() ?? 'Only authorized officers may connect and control signals.',
+                    ),
+                    TextButton(
+                      onPressed: _checkAuthorization,
+                      child: const Text('Re-check authorization'),
+                    ),
                   ],
                 ),
               ),
             )
-          else
-            Expanded(
-              child: Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.traffic_rounded, size: 72, color: AppColors.textLight),
-                    const SizedBox(height: 16),
-                    Text('No traffic light connected.\nTap Scan to locate your intersection signal.',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.poppins(color: AppColors.textGrey, height: 1.5)),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // ── Control panel ──────────────────────────────────────────────────────────
-  Widget _buildControlPanel() {
-    final light = _status?.currentLight ?? 'red';
-    final mode  = _status?.mode ?? 'manual';
-    final uptime = _status?.uptime ?? 0;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Officer badge banner
-          if (_authStatus != null) _OfficerBadgeBanner(authStatus: _authStatus!),
-          const SizedBox(height: 14),
-
-          // Connection status bar
-          _ConnectionStatusBar(
-            deviceName: _selected?.name ?? 'ESP32 Signal',
-            isAuthenticated: _ble.isAuthenticated,
-            rssi: _selected?.rssi ?? 0,
-            uptime: uptime,
-          ),
-          const SizedBox(height: 24),
-
-          // Traffic light visual
-          Center(child: _AnimatedTrafficLight(
-            activeLight: light,
-            glowAnim: _glowAnim,
-          )),
-          const SizedBox(height: 28),
-
-          // Mode toggle
-          _ModeToggleCard(
-            isAuto: _autoMode,
-            mode: mode,
-            onToggle: (val) async {
-              setState(() => _autoMode = val);
-              if (!val) await _sendLight(_ble.setManualMode);
-            },
-          ),
-          const SizedBox(height: 20),
-
-          if (!_autoMode) ...[
-            // Manual buttons
-            Text('Traffic Police Manual Override',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 16, color: AppColors.textDark)),
-            const SizedBox(height: 4),
-            Text('Tap a signal state to immediately switch the physical ESP32 LED',
-                style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey)),
-            const SizedBox(height: 14),
-            Row(
+          : ListView(
+              padding: const EdgeInsets.all(16),
               children: [
-                Expanded(child: _LightButton(
-                  label: 'RED',
-                  color: const Color(0xFFE53935),
-                  icon: Icons.stop_circle_rounded,
-                  active: light == 'red',
-                  loading: _sending,
-                  onTap: () => _sendLight(_ble.setRed),
-                )),
-                const SizedBox(width: 12),
-                Expanded(child: _LightButton(
-                  label: 'YELLOW',
-                  color: const Color(0xFFFFC107),
-                  icon: Icons.warning_amber_rounded,
-                  active: light == 'yellow',
-                  loading: _sending,
-                  onTap: () => _sendLight(_ble.setYellow),
-                )),
-                const SizedBox(width: 12),
-                Expanded(child: _LightButton(
-                  label: 'GREEN',
-                  color: const Color(0xFF43A047),
-                  icon: Icons.play_circle_rounded,
-                  active: light == 'green',
-                  loading: _sending,
-                  onTap: () => _sendLight(_ble.setGreen),
-                )),
-              ],
-            ),
-          ] else ...[
-            // Auto mode sliders
-            Text('Auto Cycle Timing Configuration',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 16, color: AppColors.textDark)),
-            const SizedBox(height: 4),
-            Text('Set phase durations then tap Apply to send to ESP32',
-                style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey)),
-            const SizedBox(height: 16),
-            _TimingSlider(label: 'Green', value: _greenSec,  color: const Color(0xFF43A047),
-                onChanged: (v) => setState(() => _greenSec  = v)),
-            _TimingSlider(label: 'Yellow', value: _yellowSec, color: const Color(0xFFFFC107),
-                onChanged: (v) => setState(() => _yellowSec = v)),
-            _TimingSlider(label: 'Red',   value: _redSec,    color: const Color(0xFFE53935),
-                onChanged: (v) => setState(() => _redSec    = v)),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _sending ? null : _applyAutoMode,
-                icon: _sending
-                    ? const SizedBox(width: 16, height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.check_circle_rounded),
-                label: Text('Apply Timing to ESP32',
-                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.infoBlue,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 28),
-          // Security details
-          _SecurityDetailsCard(isAuthenticated: _ble.isAuthenticated),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Sub-widgets ───────────────────────────────────────────────────────────────
-
-class _OfficerBadgeBanner extends StatelessWidget {
-  final Map<String, dynamic> authStatus;
-  const _OfficerBadgeBanner({required this.authStatus});
-
-  @override
-  Widget build(BuildContext context) {
-    final role = authStatus['role']?.toString() ?? 'traffic_police';
-    final name = authStatus['name']?.toString() ?? 'Officer';
-    final policeId = authStatus['policeId']?.toString() ?? '';
-    final intersection = authStatus['intersection']?.toString() ?? '';
-
-    final isTrafficPolice = role == 'traffic_police';
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE8F5E9),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF43A047).withValues(alpha: 0.4)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF2E7D32),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.local_police_rounded, color: Colors.white, size: 22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      isTrafficPolice ? 'Traffic Police Officer' : 'Administrator',
-                      style: GoogleFonts.poppins(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13,
-                        color: const Color(0xFF1B5E20),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF2E7D32),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        'AUTHORIZED',
-                        style: GoogleFonts.poppins(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                Text(
-                  '$name ${policeId.isNotEmpty ? '• ID: $policeId' : ''} ${intersection.isNotEmpty ? '• $intersection' : ''}',
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    color: const Color(0xFF2E7D32),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.badge),
+                  title: Text(
+                    '${_authorization?['name'] ?? 'Officer'} • '
+                    '${_authorization?['policeId'] ?? ''}',
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  subtitle: Text(
+                    'Assigned: ${_authorization?['intersection'] ?? ''}\n'
+                    'Intersection ID: ${_authorization?['intersectionId'] ?? 'Not assigned'}',
+                  ),
                 ),
+                Card(
+                  child: ListTile(
+                    leading: Icon(_ready ? Icons.verified : Icons.info_outline),
+                    title: Text(_readinessMessage),
+                    subtitle: Text(
+                      _selected?.name ?? 'Shared BLE controller connection',
+                    ),
+                  ),
+                ),
+                if (!_ble.isConnected) _buildScanPanel(),
+                if (_commandNotice != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(_commandNotice!),
+                  ),
+                const SizedBox(height: 12),
+                FourWaySignalPanel(
+                  status: _status,
+                  enabled: _ready,
+                  sending: _sending,
+                  onSetDirection: (direction, light) => _send(
+                    () => _ble.setDirectionLight(
+                      direction: direction,
+                      light: light,
+                    ),
+                  ),
+                  onAllRed: () => _send(_ble.setAllRed),
+                ),
+                const SizedBox(height: 16),
+                _buildModeControls(),
               ],
             ),
-          ),
-        ],
+    );
+  }
+
+  Widget _buildScanPanel() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Connect to your assigned intersection controller.'),
+            if (_connecting) const LinearProgressIndicator(),
+            FilledButton.icon(
+              onPressed: _connecting
+                  ? null
+                  : (_scanning ? _stopScan : _startScan),
+              icon: const Icon(Icons.bluetooth_searching),
+              label: Text(_scanning ? 'Stop scan' : 'Scan for controllers'),
+            ),
+            for (final device in _devices)
+              ListTile(
+                title: Text(device.name),
+                subtitle: Text('${device.rssi} dBm'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _connecting ? null : () => _connect(device),
+              ),
+            if (_scanning && _devices.isEmpty)
+              const Text('Searching for nearby controllers…'),
+          ],
+        ),
       ),
     );
   }
-}
 
-class _SecurityBanner extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE3F2FD),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.infoBlue.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.security_rounded, color: AppColors.infoBlue, size: 26),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Traffic Police Controlled Signal',
-                    style: GoogleFonts.poppins(fontWeight: FontWeight.w700,
-                        fontSize: 13, color: AppColors.infoBlue)),
-                Text('Only verified Traffic Police officers can issue BLE commands. Protected with Secret Passcode Verification.',
-                    style: GoogleFonts.poppins(fontSize: 11, color: const Color(0xFF1565C0), height: 1.4)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DeviceTile extends StatelessWidget {
-  final TrafficLightDevice device;
-  final bool               isConnecting;
-  final VoidCallback       onTap;
-  const _DeviceTile({required this.device, required this.isConnecting, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: isConnecting ? null : onTap,
-      child: Container(
+  Widget _buildModeControls() {
+    final enabled = _ready && !_sending && !_isTransferring(_status);
+    return Card(
+      child: Padding(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.cardBorder),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 6)],
-        ),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: const Color(0xFFE3F2FD), borderRadius: BorderRadius.circular(12)),
-              child: const Icon(Icons.bluetooth_rounded, color: AppColors.infoBlue, size: 22),
+            Text('Device-reported mode: ${_status?.mode ?? 'unknown'}'),
+            const Text(
+              'Timing values below are a draft until applied and acknowledged.',
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(device.name, style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
-                      fontSize: 14, color: AppColors.textDark)),
-                  Text('RSSI: ${device.rssi} dBm  •  ${device.device.remoteId}',
-                      style: GoogleFonts.poppins(fontSize: 11, color: AppColors.textGrey)),
-                ],
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: enabled ? () => _send(_ble.setManualMode) : null,
+              child: const Text('Apply manual mode'),
+            ),
+            _timingSlider(
+              'Green per direction',
+              _greenSec,
+              5,
+              300,
+              enabled ? (value) => setState(() => _greenSec = value) : null,
+            ),
+            _timingSlider(
+              'Yellow clearance',
+              _yellowSec,
+              3,
+              60,
+              enabled ? (value) => setState(() => _yellowSec = value) : null,
+            ),
+            _timingSlider(
+              'All-red clearance',
+              _allRedSec,
+              2,
+              60,
+              enabled ? (value) => setState(() => _allRedSec = value) : null,
+            ),
+            FilledButton(
+              onPressed: enabled
+                  ? () => _send(
+                      () => _ble.setAutoMode(
+                        greenSec: _greenSec,
+                        yellowSec: _yellowSec,
+                        allRedSec: _allRedSec,
+                      ),
+                    )
+                  : null,
+              child: const Text('Apply auto mode and timings'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _timingSlider(
+    String label,
+    int value,
+    int min,
+    int max,
+    ValueChanged<int>? onChanged,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$label: $value s ($min–$max s)'),
+        Slider(
+          label: '$value s',
+          value: value.toDouble(),
+          min: min.toDouble(),
+          max: max.toDouble(),
+          divisions: max - min,
+          onChanged: onChanged == null
+              ? null
+              : (value) => onChanged(value.round()),
+        ),
+      ],
+    );
+  }
+}
+
+bool _isTransferring(TrafficLightStatus? status) =>
+    status?.phase == 'yellow' ||
+    (status?.targetDirection != null && status?.phase == 'all_red');
+
+String _controllerError(String code) => switch (code) {
+  'busy' => 'busy — controller is completing a transfer; wait or use All Red.',
+  'unconfigured' => 'unconfigured — controller needs an intersection binding.',
+  'intersection_mismatch' =>
+    'intersection_mismatch — controller does not match your assignment.',
+  _ => code,
+};
+
+/// Commands never change these readouts; only device-reported status does.
+class FourWaySignalPanel extends StatelessWidget {
+  const FourWaySignalPanel({
+    super.key,
+    required this.status,
+    required this.enabled,
+    required this.onSetDirection,
+    required this.onAllRed,
+    this.sending = false,
+  });
+
+  final TrafficLightStatus? status;
+  final bool enabled;
+  final bool sending;
+  final void Function(String direction, String light) onSetDirection;
+  final VoidCallback onAllRed;
+
+  @override
+  Widget build(BuildContext context) {
+    final transferring = _isTransferring(status);
+    final canChangeDirection = enabled && !sending && !transferring;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Four-way device status',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const Text(
+          'Only controller-reported lights are shown. Unknown is not red. '
+          'Disabled readouts may be outdated.',
+        ),
+        if (status != null) ...[
+          Text('Mode: ${status!.mode} • Phase: ${status!.phase}'),
+          Text(
+            'Controller: ${status!.intersectionId} • v${status!.version} • '
+            'Sequence ${status!.sequence} • Uptime ${status!.uptime} s',
+          ),
+          if (status!.errorCode != null)
+            Text('Controller error: ${_controllerError(status!.errorCode!)}'),
+        ],
+        if (transferring)
+          Text(
+            'Transfer pending → ${status!.targetDirection?.toUpperCase() ?? 'ALL RED'}. '
+            'Waiting for device-reported completion after yellow and all-red clearance.',
+          ),
+        if (sending) ...[
+          const LinearProgressIndicator(),
+          const Text('Waiting for controller acknowledgement…'),
+        ],
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          key: const ValueKey('all-red'),
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.red.shade800,
+            foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(52),
+          ),
+          onPressed: enabled && !sending ? onAllRed : null,
+          icon: const Icon(Icons.stop_circle_outlined),
+          label: const Text('ALL RED — stop every direction'),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'A green request selects one direction; firmware keeps the other '
+          'directions red. Transfers pass through yellow clearance → all-red '
+          'clearance before the selected direction turns green (at least 3 + 2 seconds). '
+          'All Red remains available during a transfer after acknowledgement.',
+        ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth >= 600
+                ? (constraints.maxWidth - 12) / 2
+                : constraints.maxWidth;
+            return Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final direction in kTrafficDirections)
+                  SizedBox(
+                    width: width,
+                    child: _directionCard(
+                      context,
+                      direction,
+                      canChangeDirection,
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _directionCard(
+    BuildContext context,
+    String direction,
+    bool canChange,
+  ) {
+    final light = status?.lightFor(direction).toLowerCase() ?? 'unknown';
+    final known = const ['red', 'yellow', 'green'].contains(light);
+    final name = '${direction[0].toUpperCase()}${direction.substring(1)}';
+    return Card(
+      key: ValueKey('head-$direction'),
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(name, style: Theme.of(context).textTheme.titleMedium),
+            Semantics(
+              label:
+                  '$name device-reported light: ${known ? light : 'unknown'}',
+              child: Text(
+                'Reported: ${known ? light.toUpperCase() : 'UNKNOWN'}',
+                key: ValueKey('reported-$direction'),
               ),
             ),
-            if (isConnecting)
-              const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-            else
-              const Icon(Icons.chevron_right_rounded, color: AppColors.textLight),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ConnectionStatusBar extends StatelessWidget {
-  final String deviceName;
-  final bool   isAuthenticated;
-  final int    rssi;
-  final int    uptime;
-  const _ConnectionStatusBar({
-    required this.deviceName, required this.isAuthenticated,
-    required this.rssi, required this.uptime,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final minutes = uptime ~/ 60;
-    final seconds = uptime % 60;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.bluetooth_connected_rounded, color: AppColors.infoBlue, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(deviceName, style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
-                    fontSize: 13, color: AppColors.textDark)),
-                Text('Uptime: ${minutes}m ${seconds}s  •  RSSI: $rssi dBm',
-                    style: GoogleFonts.poppins(fontSize: 11, color: AppColors.textGrey)),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: isAuthenticated ? const Color(0xFFE8F5E9) : const Color(0xFFFFEBEE),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              children: [
-                Icon(isAuthenticated ? Icons.lock_rounded : Icons.lock_open_rounded,
-                    size: 12, color: isAuthenticated ? AppColors.success : AppColors.primary),
-                const SizedBox(width: 4),
-                Text(isAuthenticated ? 'Officer Auth' : 'Auth…',
-                    style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w600,
-                        color: isAuthenticated ? AppColors.success : AppColors.primary)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AnimatedTrafficLight extends StatelessWidget {
-  final String          activeLight;
-  final Animation<double> glowAnim;
-  const _AnimatedTrafficLight({required this.activeLight, required this.glowAnim});
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: glowAnim,
-      builder: (context, child) => Container(
-        width: 90,
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1C1C1E),
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 8))],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _LightBulb(color: const Color(0xFFE53935), active: activeLight == 'red',   glow: glowAnim.value),
-            const SizedBox(height: 14),
-            _LightBulb(color: const Color(0xFFFFC107), active: activeLight == 'yellow', glow: glowAnim.value),
-            const SizedBox(height: 14),
-            _LightBulb(color: const Color(0xFF43A047), active: activeLight == 'green',  glow: glowAnim.value),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LightBulb extends StatelessWidget {
-  final Color  color;
-  final bool   active;
-  final double glow;
-  const _LightBulb({required this.color, required this.active, required this.glow});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 52, height: 52,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: active ? color : color.withValues(alpha: 0.2),
-        boxShadow: active ? [
-          BoxShadow(color: color.withValues(alpha: glow * 0.8), blurRadius: 20 * glow, spreadRadius: 4 * glow),
-        ] : [],
-      ),
-    );
-  }
-}
-
-class _ModeToggleCard extends StatelessWidget {
-  final bool     isAuto;
-  final String   mode;
-  final ValueChanged<bool> onToggle;
-  const _ModeToggleCard({required this.isAuto, required this.mode, required this.onToggle});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.auto_awesome_rounded, color: AppColors.accentOrange, size: 22),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Auto Cycle Mode', style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
-                    fontSize: 14, color: AppColors.textDark)),
-                Text('ESP32 cycles lights automatically',
-                    style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey)),
-              ],
-            ),
-          ),
-          Switch.adaptive(
-            value: isAuto,
-            onChanged: onToggle,
-            activeThumbColor: AppColors.infoBlue,
-            activeTrackColor: AppColors.infoBlue.withValues(alpha: 0.4),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _LightButton extends StatelessWidget {
-  final String      label;
-  final Color       color;
-  final IconData    icon;
-  final bool        active;
-  final bool        loading;
-  final VoidCallback onTap;
-  const _LightButton({
-    required this.label, required this.color, required this.icon,
-    required this.active, required this.loading, required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: loading ? null : onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 250),
-        padding: const EdgeInsets.symmetric(vertical: 18),
-        decoration: BoxDecoration(
-          color: active ? color : color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: active ? color : color.withValues(alpha: 0.3), width: 2),
-          boxShadow: active ? [BoxShadow(color: color.withValues(alpha: 0.4), blurRadius: 12, offset: const Offset(0, 4))] : [],
-        ),
-        child: Column(
-          children: [
-            Icon(icon, size: 28, color: active ? Colors.white : color),
-            const SizedBox(height: 6),
-            Text(label, style: GoogleFonts.poppins(
-              fontWeight: FontWeight.w700, fontSize: 13,
-              color: active ? Colors.white : color,
-            )),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TimingSlider extends StatelessWidget {
-  final String        label;
-  final double        value;
-  final Color         color;
-  final ValueChanged<double> onChanged;
-  const _TimingSlider({required this.label, required this.value, required this.color, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-        decoration: BoxDecoration(
-          color: AppColors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.cardBorder),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+            const SizedBox(height: 8),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(children: [
-                  Container(width: 12, height: 12,
-                      decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                  Text('$label Phase', style: GoogleFonts.poppins(fontWeight: FontWeight.w600,
-                      fontSize: 13, color: AppColors.textDark)),
-                ]),
-                Text('${value.round()}s', style: GoogleFonts.poppins(fontWeight: FontWeight.w700,
-                    fontSize: 14, color: color)),
+                for (final entry in const {
+                  'red': Colors.red,
+                  'yellow': Colors.amber,
+                  'green': Colors.green,
+                }.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: Container(
+                      key: ValueKey('lamp-$direction-${entry.key}'),
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: light == entry.key
+                            ? entry.value
+                            : Colors.grey.shade300,
+                        border: Border.all(color: Colors.black26),
+                      ),
+                    ),
+                  ),
               ],
             ),
-            SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                activeTrackColor: color,
-                thumbColor: color,
-                inactiveTrackColor: color.withValues(alpha: 0.2),
-                overlayColor: color.withValues(alpha: 0.1),
-              ),
-              child: Slider(value: value, min: 5, max: 120, divisions: 23, onChanged: onChanged),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final color in const ['red', 'yellow', 'green'])
+                  OutlinedButton(
+                    key: ValueKey('set-$direction-$color'),
+                    onPressed:
+                        canChange && (color != 'yellow' || light == 'green')
+                        ? () => onSetDirection(direction, color)
+                        : null,
+                    child: Text(
+                      '${color[0].toUpperCase()}${color.substring(1)}',
+                    ),
+                  ),
+              ],
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SecurityDetailsCard extends StatelessWidget {
-  final bool isAuthenticated;
-  const _SecurityDetailsCard({required this.isAuthenticated});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            const Icon(Icons.security_rounded, size: 18, color: AppColors.infoBlue),
-            const SizedBox(width: 8),
-            Text('Authorization & Security Info', style: GoogleFonts.poppins(fontWeight: FontWeight.w700,
-                fontSize: 13, color: AppColors.textDark)),
-          ]),
-          const SizedBox(height: 12),
-          ...[
-            ('Required Role',     'Traffic Police only', AppColors.infoBlue),
-            ('Verification',      'Admin approved officer credentials', AppColors.infoBlue),
-            ('Connection',        isAuthenticated ? 'Connected & Authorized ✓' : 'Ready to connect',
-                isAuthenticated ? AppColors.success : AppColors.warning),
-            ('Protection',        'Pre-Shared Traffic Police Passcode', AppColors.infoBlue),
-            ('Command Validation','Real-time ESP32 verification', AppColors.infoBlue),
-          ].map((row) => Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(
-              children: [
-                Text('${row.$1}: ', style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey)),
-                Expanded(
-                  child: Text(row.$2, style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: row.$3)),
-                ),
-              ],
-            ),
-          )),
-        ],
       ),
     );
   }

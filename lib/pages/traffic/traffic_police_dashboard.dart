@@ -208,7 +208,7 @@ class _TrafficPoliceDashboardScreenState
                           ? const ListTile(
                               leading: Icon(Icons.check_circle, color: Colors.green),
                               title: Text('No approaching ambulances'),
-                              subtitle: Text('Alerts will appear within 2 km while on duty.'),
+                              subtitle: Text('Alerts will appear within 500 m while on duty. Alerts do not change hardware signals.'),
                             )
                           : ListView.builder(
                               shrinkWrap: true,
@@ -230,7 +230,7 @@ class _TrafficPoliceDashboardScreenState
         backgroundColor:  Colors.redAccent,
         foregroundColor:  Colors.white,
         icon:  const Icon(Icons.traffic_rounded),
-        label: const Text('Traffic Light Control'),
+        label: const Text('Four-way signal control'),
         onPressed: () => Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const TrafficLightControlPage()),
@@ -272,7 +272,7 @@ class _BleStatusBanner extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'ESP32 Connected: ${deviceName ?? "Signal"} (Tap to Control)',
+                  'BLE connected: ${deviceName ?? "Signal"} — open four-way controls',
                   style: GoogleFonts.poppins(
                       fontSize: 12,
                       color: const Color(0xFF2E7D32),
@@ -366,17 +366,19 @@ class _AlertCard extends StatelessWidget {
         subtitle: Text(
           '${(distance / 1000).toStringAsFixed(2)} km away'
           '${eta == null ? '' : ' • ETA $eta min'}'
-          ' • ${data['status'] ?? 'ACTIVE'}',
+          ' • ${data['status'] == 'SIGNAL_OVERRIDDEN' ? 'RECORDED UPDATE' : data['status'] ?? 'ACTIVE'}'
+          '\nAlert record only — hardware changes require four-way controls.',
         ),
         trailing: Wrap(
           spacing: 2,
           children: [
             IconButton(
-              tooltip: 'Override signal to green',
-              color: Colors.green,
-              onPressed: () => adminService.overrideSignal(
-                doc.id,
-                data['dispatchId']?.toString() ?? '',
+              tooltip: 'Open four-way controls to choose a direction',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const TrafficLightControlPage(),
+                ),
               ),
               icon: const Icon(Icons.traffic),
             ),

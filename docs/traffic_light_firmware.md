@@ -4,11 +4,10 @@
 
 ## Scope and configuration
 
-- `traffic_light_controller.h`: portable, single-owner nonblocking state machine and packet-framing guard; no Arduino dependencies.
-- `traffic_light_firmware.ino`: classic ESP32 Arduino BLE, ArduinoJson 6/7, bounded FreeRTOS queue, GPIO and status adapter.
-- `test/firmware/four_way_controller_test.cpp`: standalone host tests.
+- `traffic_light_firmware/traffic_light_firmware.ino`: self-contained sketch with the portable, single-owner nonblocking controller, packet-framing guard, classic ESP32 Arduino BLE, ArduinoJson 6/7, bounded FreeRTOS queue, GPIO and status adapter. No separate project header is required.
+- `test/firmware/four_way_controller_test.cpp`: standalone host tests that include the same sketch with `TRAFFIC_LIGHT_HOST_TEST` defined to exclude ESP32-specific code.
 
-The existing BLE device name, passcode value and service/characteristic UUIDs are preserved. This firmware replaces the old single-lamp protocol; legacy `RED`, `YELLOW`, `GREEN`, and `red_sec` commands are **not** supported. Dart service/models and UI are outside this change.
+The existing BLE device name, passcode value and service/characteristic UUIDs are preserved. This firmware replaces the old single-lamp protocol; legacy `RED`, `YELLOW`, `GREEN`, and `red_sec` commands are **not** supported. The Dart BLE service, protocol model and police control screen now use this same v2 contract. Legacy firmware is rejected rather than receiving ambiguous single-lamp commands.
 
 Set `INTERSECTION_ID` in the sketch to the **Firestore document ID**, not the name, Plus Code or direction-specific light ID. Its default is `UNCONFIGURED`: boot remains all red, authenticated `STATUS` discovery works, and every control is rejected with `unconfigured`.
 
@@ -158,7 +157,17 @@ The optimized build and a separate `-O0 -g -D_GLIBCXX_ASSERTIONS` debug build ea
 
 These tests execute the **portable controller/framing guard**, not ArduinoJson, ESP32 BLE/FreeRTOS, electrical outputs, MTU negotiation or physical timing. The Arduino adapter contains conditional support for ArduinoJson 6/7 and ESP32 core BLE `getValue()` return types (`std::string` in 2.x, `String` in 3.x), but **an ESP32 build has not been run: Arduino CLI is unavailable**. No ESP32 compile success, bench behavior, or hardware safety certification is implied by passing host tests.
 
-For a later Arduino build, place the `.ino` and header together in an Arduino sketch folder named `traffic_light_firmware`, select a classic ESP32 board and install ArduinoJson 6 or 7. Keep generated sketch/build artifacts outside source or under ignored `build/`. Compile both intended dependency combinations before any hardware work. Do not upload/flash as part of host testing.
+For a later Arduino build, open `traffic_light_firmware/traffic_light_firmware.ino` directly in Arduino IDE, select a classic ESP32 board and install ArduinoJson 6 or 7. The sketch already resides in its matching folder and needs no separate controller header. Keep generated sketch/build artifacts outside source or under ignored `build/`. Compile both intended dependency combinations before any hardware work. Do not upload/flash as part of host testing.
+
+## Flutter police control
+
+`lib/services/ble_traffic_service.dart` checks the officer's verified/approved role and active intersection using a fresh server read before connecting or sending a command. An explicit `assignedIntersectionId` is preferred; legacy name/code/location assignments must resolve to exactly one active directory record. The firmware's configured intersection must match it.
+
+On Android the app requests MTU 517 and refuses a connection below 515; other platforms must already negotiate at least 515. It subscribes and reads telemetry, rejects legacy/incompatible devices, then sends an authenticated `STATUS` handshake. Only matching, valid v2 snapshots can acknowledge commands. Notifications older than six seconds disable controls. A write response alone never produces success; the app waits up to ten seconds for the exact request ID, checks the controller error, and never automatically replays a timed-out command. A timeout means the outcome is unknown: refresh status before issuing another control.
+
+Use **Four-way control** from the police dashboard, then scan and explicitly select the correct controller once per app session. Auto-reconnect only targets the previously verified BLE device for that assigned intersection, never simply the strongest nearby traffic controller. North/East/South/West heads show reported controller outputs (not sensor-verified lamp feedback). Directional controls wait for firmware clearance; **All Red** can cancel a transfer. Auto mode uses separate green, yellow and all-red durations, cycling one direction at a time. The old Firestore-only override icon was removed; an emergency alert does not silently operate physical lights.
+
+The application does not update Firestore's directory light states from these BLE snapshots; the admin directory remains configuration, not a live signal monitor. No firmware upload or physical controller mapping was performed automatically.
 
 ## Security and release blockers
 

@@ -1,4 +1,5 @@
-#include "../../traffic_light_controller.h"
+#define TRAFFIC_LIGHT_HOST_TEST
+#include "../../traffic_light_firmware/traffic_light_firmware.ino"
 
 #include <cstdlib>
 #include <functional>

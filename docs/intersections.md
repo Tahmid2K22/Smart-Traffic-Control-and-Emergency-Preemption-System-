@@ -56,7 +56,7 @@ All four entries have been written to project `e-ambulance-system-001` through t
 
 ## Hardware limitations
 
-The current BLE command/status contract represents a **single lamp**, not four independent directional traffic lights; four-way hardware firmware is not established by this repository. The four-way directory model does **not** establish four-way hardware capability, assign physical controllers, or synchronize live signal states. These UI/schema/default-record changes make **no automatic hardware changes** and send no signal commands. Four-way hardware support would require separate firmware, controller mapping, protocol, and safety validation work.
+The repository now includes **four-way v2 prototype firmware**, a matching BLE protocol and directional police controls. See [traffic_light_firmware.md](traffic_light_firmware.md) for pin wiring, required intersection binding, safety transitions and flashing prerequisites. The directory alone does **not** assign physical controllers or synchronize live signal states. No hardware was flashed automatically. This prototype has no physical output feedback or public-road safety certification; hardware, security and electrical validation remain required.
 
 ## Critical deployment/security requirements
 

@@ -8,138 +8,193 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-// ── BLE UUIDs & Passcode ──────────────────────────────────────────────────────
-const String kTrafficServiceUUID = '12345678-1234-1234-1234-123456789abc';
-const String kCommandCharUUID    = '12345678-1234-1234-1234-123456789001';
-const String kStatusCharUUID     = '12345678-1234-1234-1234-123456789002';
-const String kPolicePasscode     = 'TRAFFIC_POLICE_SECURE_PASS_2024';
+import '../models/intersection_point.dart';
+import '../models/traffic_light_status.dart';
+export '../models/traffic_light_status.dart';
 
-// ── Models ───────────────────────────────────────────────────────────────────
+const String kTrafficServiceUUID = '12345678-1234-1234-1234-123456789abc';
+const String kCommandCharUUID = '12345678-1234-1234-1234-123456789001';
+const String kStatusCharUUID = '12345678-1234-1234-1234-123456789002';
+// Prototype shared credential only; this is not a Firebase identity proof.
+const String kPolicePasscode = 'TRAFFIC_POLICE_SECURE_PASS_2024';
+
 class TrafficLightDevice {
-  final BluetoothDevice device;
-  final String name;
-  final int rssi;
   TrafficLightDevice({
     required this.device,
     required this.name,
     required this.rssi,
   });
+  final BluetoothDevice device;
+  final String name;
+  final int rssi;
 }
 
-class TrafficLightStatus {
-  final String currentLight; // 'red' | 'yellow' | 'green'
-  final String mode;         // 'manual' | 'auto'
-  final int    uptime;       // seconds
-  final bool   authOk;
-
-  TrafficLightStatus({
-    required this.currentLight,
-    required this.mode,
-    required this.uptime,
-    required this.authOk,
-  });
-
-  factory TrafficLightStatus.fromJson(Map<String, dynamic> j) =>
-      TrafficLightStatus(
-        currentLight: j['light']  as String? ?? 'red',
-        mode:         j['mode']   as String? ?? 'manual',
-        uptime:       (j['uptime'] as num?)?.toInt() ?? 0,
-        authOk:       j['auth']   as bool?   ?? true,
-      );
-}
-
-// ── BleTrafficService ─────────────────────────────────────────────────────────
 class BleTrafficService {
   BleTrafficService._();
   static final BleTrafficService instance = BleTrafficService._();
 
-  BluetoothDevice?         _device;
+  BluetoothDevice? _device;
   BluetoothCharacteristic? _cmdChar;
   BluetoothCharacteristic? _statusChar;
-
-  final _statusController = StreamController<TrafficLightStatus>.broadcast();
+  StreamSubscription<List<int>>? _statusSub;
+  StreamSubscription<BluetoothConnectionState>? _deviceSub;
   StreamSubscription<List<ScanResult>>? _autoScanSub;
-  StreamSubscription<BluetoothConnectionState>? _connSub;
-
+  Timer? _autoRetry;
+  TrafficLightStatus? _latestStatus;
+  DateTime? _receivedAt;
+  String? _boundIntersectionId;
+  final _statusController = StreamController<TrafficLightStatus>.broadcast();
+  final _connectionController = StreamController<bool>.broadcast();
+  final _pending = <String, Completer<TrafficLightStatus>>{};
+  final _rejectedDevices = <String>{};
+  final _knownDevices = <String, String>{};
+  String? _autoIntersectionId;
+  int _requestCounter = 0;
+  int _session = 0;
+  bool _sending = false;
   bool _autoConnectEnabled = false;
-  bool _autoConnecting     = false;
+  bool _autoConnecting = false;
+  bool _disposed = false;
+  void Function(TrafficLightDevice)? _onConnected;
+  void Function()? _onDisconnected;
+  void Function(String)? _onError;
 
   Stream<TrafficLightStatus> get statusStream => _statusController.stream;
-  bool get isConnected        => _device?.isConnected ?? false;
-  bool get isAuthenticated    => isConnected;
+  Stream<bool> get connectionStream => _connectionController.stream;
+  TrafficLightStatus? get latestStatus => _latestStatus;
+  bool get isConnected => _device?.isConnected ?? false;
+  bool get isAuthenticated =>
+      isConnected &&
+      _latestStatus?.authOk == true &&
+      _latestStatus?.intersectionId == _boundIntersectionId;
+  bool get isReady =>
+      isAuthenticated &&
+      _latestStatus?.supportsFourWay == true &&
+      _boundIntersectionId != 'UNCONFIGURED' &&
+      _receivedAt != null &&
+      DateTime.now().difference(_receivedAt!) <= const Duration(seconds: 6);
   bool get autoConnectEnabled => _autoConnectEnabled;
 
-  // ── Permissions ────────────────────────────────────────────────────────────
   Future<bool> requestPermissions() async {
     if (kIsWeb) return false;
     if (Platform.isAndroid) {
-      final res = await [
+      final result = await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.locationWhenInUse,
       ].request();
-      return res.values.every((s) => s.isGranted || s.isLimited);
+      return result.values.every(
+        (status) => status.isGranted || status.isLimited,
+      );
     }
-    if (Platform.isIOS) {
-      return (await Permission.bluetooth.request()).isGranted;
-    }
+    if (Platform.isIOS) return (await Permission.bluetooth.request()).isGranted;
     return true;
   }
 
-  // ── Role Authorization Gate ────────────────────────────────────────────────
   Future<Map<String, dynamic>> checkUserAuthorization() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      return {'isAuthorized': false, 'role': 'none', 'reason': 'Please log in.'};
+      return {'isAuthorized': false, 'reason': 'Please log in.'};
     }
-
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
-      final data = doc.data() ?? {};
-      final role = data['role'] as String? ?? 'user';
-      if (role != 'traffic_police') {
+      final firestore = FirebaseFirestore.instance;
+      final profile =
+          (await firestore
+                  .collection('users')
+                  .doc(user.uid)
+                  .get(const GetOptions(source: Source.server))
+                  .timeout(const Duration(seconds: 8)))
+              .data() ??
+          {};
+      if (profile['role'] != 'traffic_police' ||
+          profile['isVerified'] != true ||
+          profile['verificationStatus'] != 'APPROVED') {
         return {
           'isAuthorized': false,
-          'role': role,
-          'reason': 'Restricted: Traffic light can only be controlled by verified Traffic Police officers.',
+          'reason':
+              'Only approved, verified traffic police can control signals.',
         };
       }
-
-      final isVerified = data['isVerified'] == true && data['verificationStatus'] == 'APPROVED';
-      if (!isVerified) {
+      IntersectionPoint? assigned;
+      final explicitId = profile['assignedIntersectionId'] as String?;
+      if (explicitId != null && explicitId.isNotEmpty) {
+        final doc = await firestore
+            .collection('intersections')
+            .doc(explicitId)
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 8));
+        if (doc.exists) {
+          assigned = IntersectionPoint.fromMap(doc.id, doc.data()!);
+        }
+      } else {
+        final documents = await firestore
+            .collection('intersections')
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 8));
+        final location = profile['intersectionLocation'];
+        final matches = documents.docs
+            .map((doc) => IntersectionPoint.fromMap(doc.id, doc.data()))
+            .where(
+              (point) =>
+                  point.isActive &&
+                  point.matchesOfficer(
+                    assignedIntersection:
+                        profile['assignedIntersection'] as String?,
+                    latitude: location is GeoPoint
+                        ? location.latitude
+                        : (profile['intersectionLatitude'] as num?)?.toDouble(),
+                    longitude: location is GeoPoint
+                        ? location.longitude
+                        : (profile['intersectionLongitude'] as num?)
+                              ?.toDouble(),
+                  ),
+            )
+            .toList();
+        // Ambiguous legacy assignments must be resolved explicitly by an admin.
+        if (matches.length == 1) assigned = matches.single;
+      }
+      if (assigned == null || !assigned.isActive) {
         return {
           'isAuthorized': false,
-          'role': role,
-          'reason': 'Pending: Traffic Police account awaiting Admin approval.',
+          'reason': 'Ask an admin to assign one active saved intersection to your account.',
         };
       }
-
       return {
         'isAuthorized': true,
-        'role': role,
-        'name': data['name'] ?? data['fullName'] ?? 'Officer',
-        'policeId': data['policeId'] ?? '',
-        'intersection': data['assignedIntersection'] ?? '',
+        'role': 'traffic_police',
+        'uid': user.uid,
+        'name': profile['name'] ?? profile['fullName'] ?? 'Officer',
+        'policeId': profile['policeId'] ?? '',
+        'intersection': assigned.name,
+        'intersectionId': assigned.id,
       };
-    } catch (e) {
-      return {'isAuthorized': false, 'role': 'unknown', 'reason': '$e'};
+    } catch (_) {
+      return {
+        'isAuthorized': false,
+        'reason': 'Could not verify your current permission and intersection. Check your connection and retry.',
+      };
     }
   }
 
-  // ── Manual Scan ────────────────────────────────────────────────────────────
-  Stream<List<TrafficLightDevice>> scan({Duration timeout = const Duration(seconds: 10)}) async* {
+  TrafficLightDevice _scanDevice(ScanResult result) => TrafficLightDevice(
+    device: result.device,
+    name: result.device.platformName.isEmpty
+        ? 'ESP32 Traffic Light'
+        : result.device.platformName,
+    rssi: result.rssi,
+  );
+
+  Stream<List<TrafficLightDevice>> scan({
+    Duration timeout = const Duration(seconds: 10),
+  }) async* {
     final found = <String, TrafficLightDevice>{};
     await FlutterBluePlus.startScan(
       withServices: [Guid(kTrafficServiceUUID)],
       timeout: timeout,
     );
     await for (final results in FlutterBluePlus.scanResults) {
-      for (final r in results) {
-        found[r.device.remoteId.str] = TrafficLightDevice(
-          device: r.device,
-          name: r.device.platformName.isNotEmpty ? r.device.platformName : 'ESP32 Traffic Light',
-          rssi: r.rssi,
-        );
+      for (final result in results) {
+        found[result.device.remoteId.str] = _scanDevice(result);
       }
       yield found.values.toList();
     }
@@ -147,207 +202,367 @@ class BleTrafficService {
 
   Future<void> stopScan() => FlutterBluePlus.stopScan();
 
-  // ── Auto-Connect ───────────────────────────────────────────────────────────
   Future<void> startAutoConnect({
-    void Function(TrafficLightDevice dev)? onConnected,
+    void Function(TrafficLightDevice)? onConnected,
     void Function()? onDisconnected,
-    void Function(String msg)? onError,
+    void Function(String)? onError,
   }) async {
+    _onConnected = onConnected;
+    _onDisconnected = onDisconnected;
+    _onError = onError;
     if (_autoConnectEnabled) return;
-
-    final permOk = await requestPermissions();
-    if (!permOk) {
+    if (!await requestPermissions()) {
       onError?.call('Bluetooth permissions not granted.');
       return;
     }
-
-    final auth = await checkUserAuthorization();
-    if (auth['isAuthorized'] != true) {
-      onError?.call(auth['reason'] as String? ?? 'Unauthorized.');
+    final authorization = await checkUserAuthorization();
+    if (authorization['isAuthorized'] != true) {
+      onError?.call(authorization['reason'] as String);
       return;
     }
-
     _autoConnectEnabled = true;
-    _runAutoScan(onConnected, onDisconnected, onError);
+    _autoIntersectionId = authorization['intersectionId'] as String;
+    _rejectedDevices.clear();
+    if (!_knownDevices.containsKey(_autoIntersectionId)) {
+      onError?.call(
+        'Select and connect to your assigned controller in Four-way control first. Auto-reconnect only uses a previously verified device.',
+      );
+      return;
+    }
+    if (isReady) {
+      onConnected?.call(
+        TrafficLightDevice(
+          device: _device!,
+          name: _device!.platformName,
+          rssi: 0,
+        ),
+      );
+    } else {
+      await _runAutoScan();
+    }
   }
 
-  Future<void> _runAutoScan(
-    void Function(TrafficLightDevice dev)? onConnected,
-    void Function()? onDisconnected,
-    void Function(String msg)? onError,
-  ) async {
-    if (!_autoConnectEnabled || isConnected || _autoConnecting) return;
-
-    _autoScanSub?.cancel();
-    await FlutterBluePlus.startScan(withServices: [Guid(kTrafficServiceUUID)]);
-
-    _autoScanSub = FlutterBluePlus.scanResults.listen((results) async {
-      if (!_autoConnectEnabled || _autoConnecting || isConnected || results.isEmpty) return;
-
-      final best = results.reduce((a, b) => a.rssi >= b.rssi ? a : b);
-      _autoConnecting = true;
-      await FlutterBluePlus.stopScan();
-      _autoScanSub?.cancel();
-
-      final dev = TrafficLightDevice(
-        device: best.device,
-        name: best.device.platformName.isNotEmpty ? best.device.platformName : 'ESP32 Traffic Light',
-        rssi: best.rssi,
+  Future<void> _runAutoScan() async {
+    if (!_autoConnectEnabled || isConnected || _autoConnecting || _disposed) {
+      return;
+    }
+    try {
+      await _autoScanSub?.cancel();
+      await FlutterBluePlus.startScan(
+        withServices: [Guid(kTrafficServiceUUID)],
       );
-
-      try {
-        await connect(best.device);
-        _autoConnecting = false;
-
-        _connSub?.cancel();
-        _connSub = best.device.connectionState.listen((state) {
-          if (state == BluetoothConnectionState.disconnected && _autoConnectEnabled) {
-            _cmdChar = _statusChar = null;
-            onDisconnected?.call();
-            Future.delayed(const Duration(seconds: 3), () {
-              _runAutoScan(onConnected, onDisconnected, onError);
-            });
+      _autoScanSub = FlutterBluePlus.scanResults.listen((results) async {
+        if (!_autoConnectEnabled || _autoConnecting || isConnected) return;
+        final candidates = results
+            .where(
+              (result) =>
+                  !_rejectedDevices.contains(result.device.remoteId.str) &&
+                  result.device.remoteId.str ==
+                      _knownDevices[_autoIntersectionId],
+            )
+            .toList();
+        if (candidates.isEmpty) return;
+        candidates.sort((a, b) => b.rssi.compareTo(a.rssi));
+        final best = candidates.first;
+        _autoConnecting = true;
+        await FlutterBluePlus.stopScan();
+        try {
+          await connect(best.device);
+          _onConnected?.call(_scanDevice(best));
+        } catch (error) {
+          // Retry transient link/network failures, but never repeatedly attach
+          // to a device whose firmware or intersection no longer matches.
+          final message = '$error';
+          if (message.contains('intersection mismatch') ||
+              message.contains('Legacy or invalid firmware')) {
+            _rejectedDevices.add(best.device.remoteId.str);
+            _autoConnectEnabled = false;
           }
-        });
-
-        onConnected?.call(dev);
-      } catch (e) {
-        _autoConnecting = false;
-        onError?.call(e.toString());
-        if (_autoConnectEnabled) {
-          Future.delayed(const Duration(seconds: 4), () {
-            _runAutoScan(onConnected, onDisconnected, onError);
-          });
+          _onError?.call(message);
+        } finally {
+          _autoConnecting = false;
+          if (!isConnected) _scheduleAutoScan();
         }
-      }
-    });
+      }, onError: (Object error) => _onError?.call('$error'));
+    } catch (error) {
+      _onError?.call('$error');
+    }
+  }
+
+  void _scheduleAutoScan() {
+    _autoRetry?.cancel();
+    if (_autoConnectEnabled && !_disposed) {
+      _autoRetry = Timer(
+        const Duration(seconds: 3),
+        () => unawaited(_runAutoScan()),
+      );
+    }
   }
 
   Future<void> stopAutoConnect() async {
     _autoConnectEnabled = false;
-    _autoConnecting     = false;
-    _autoScanSub?.cancel();
-    _connSub?.cancel();
+    _autoRetry?.cancel();
+    await _autoScanSub?.cancel();
     _autoScanSub = null;
-    _connSub     = null;
     await FlutterBluePlus.stopScan();
   }
 
-  // ── Connection ─────────────────────────────────────────────────────────────
   void _findChars(List<BluetoothService> services) {
-    for (final s in services) {
-      if (s.uuid == Guid(kTrafficServiceUUID)) {
-        for (final c in s.characteristics) {
-          if (c.uuid == Guid(kCommandCharUUID)) _cmdChar = c;
-          if (c.uuid == Guid(kStatusCharUUID))  _statusChar = c;
+    for (final service in services) {
+      if (service.uuid != Guid(kTrafficServiceUUID)) continue;
+      for (final characteristic in service.characteristics) {
+        if (characteristic.uuid == Guid(kCommandCharUUID)) {
+          _cmdChar = characteristic;
         }
-        break;
+        if (characteristic.uuid == Guid(kStatusCharUUID)) {
+          _statusChar = characteristic;
+        }
       }
+    }
+  }
+
+  void _acceptStatus(List<int> bytes, int session) {
+    if (session != _session || bytes.isEmpty || _disposed) return;
+    try {
+      final status = TrafficLightStatus.fromJson(
+        jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>,
+      );
+      if (_latestStatus != null &&
+          ((status.sequence - _latestStatus!.sequence) & 0xffffffff) >
+              0x7fffffff) {
+        return;
+      }
+      _latestStatus = status;
+      _receivedAt = DateTime.now();
+      _statusController.add(status);
+      final pending = _pending[status.ackId];
+      if (pending != null &&
+          !pending.isCompleted &&
+          status.intersectionId == _boundIntersectionId &&
+          status.supportsFourWay) {
+        pending.complete(status);
+      }
+    } catch (_) {
+      // A malformed/truncated packet cannot refresh readiness or acknowledge a command.
+      debugPrint(
+        '[BLE] Invalid four-way status packet; controls remain gated by last valid telemetry.',
+      );
     }
   }
 
   Future<void> connect(BluetoothDevice device) async {
-    final auth = await checkUserAuthorization();
-    if (auth['isAuthorized'] != true) {
-      throw Exception(auth['reason'] ?? 'Unauthorized.');
+    final authorization = await checkUserAuthorization();
+    if (authorization['isAuthorized'] != true) {
+      throw StateError(authorization['reason'] as String);
     }
-
+    await disconnect();
+    final session = ++_session;
     _device = device;
-    _cmdChar  = null;   // clear any stale chars left over from a previous session
-    _statusChar = null;
-
-    await device.connect(
-      license: License.nonprofit,
-      autoConnect: false,
-      timeout: const Duration(seconds: 12),
-    );
-
-    var services = await device.discoverServices();
-    _findChars(services);
-
-    // Android caches the GATT table; if the ESP32 firmware was re-flashed the
-    // cache is stale and the characteristics look "missing". Refresh once.
-    if (!kIsWeb && Platform.isAndroid && (_cmdChar == null || _statusChar == null)) {
-      try {
+    _boundIntersectionId = authorization['intersectionId'] as String;
+    try {
+      await device.connect(
+        license: License.nonprofit,
+        autoConnect: false,
+        timeout: const Duration(seconds: 12),
+      );
+      if (!kIsWeb && Platform.isAndroid) {
+        final mtu = await device.requestMtu(517);
+        if (mtu < 515) {
+          throw StateError(
+            'Four-way telemetry requires BLE MTU 515 or greater (received $mtu).',
+          );
+        }
+      } else if (device.mtuNow < 515) {
+        throw StateError(
+          'This platform has not negotiated the MTU required for four-way telemetry.',
+        );
+      }
+      _deviceSub = device.connectionState.listen((state) {
+        if (session != _session ||
+            state != BluetoothConnectionState.disconnected) {
+          return;
+        }
+        _clearState();
+        _onDisconnected?.call();
+        _scheduleAutoScan();
+      });
+      _findChars(await device.discoverServices());
+      if (!kIsWeb &&
+          Platform.isAndroid &&
+          (_cmdChar == null || _statusChar == null)) {
         await device.clearGattCache();
-        services = await device.discoverServices();
-        _findChars(services);
-      } catch (e) {
-        debugPrint('[BLE] GATT cache refresh failed: $e');
+        _findChars(await device.discoverServices());
+      }
+      if (_cmdChar == null || _statusChar == null) {
+        throw StateError(
+          'Matching traffic-light BLE characteristics were not found. Flash the v2 firmware.',
+        );
+      }
+      _statusSub = _statusChar!.onValueReceived.listen(
+        (bytes) => _acceptStatus(bytes, session),
+      );
+      await _statusChar!.setNotifyValue(true);
+      _acceptStatus(await _statusChar!.read(), session);
+      final status = _latestStatus;
+      if (status == null || !status.supportsFourWay) {
+        throw StateError(
+          'Legacy or invalid firmware: install four-way protocol v2 before controlling signals.',
+        );
+      }
+      if (status.intersectionId != _boundIntersectionId ||
+          status.intersectionId == 'UNCONFIGURED') {
+        throw StateError(
+          'Controller intersection mismatch. Configure the ESP32 with your assigned Firestore intersection ID.',
+        );
+      }
+      await _sendCommand({'cmd': 'STATUS'});
+      if (!isReady) {
+        throw StateError('Controller authentication/status handshake failed.');
+      }
+      _knownDevices[_boundIntersectionId!] = device.remoteId.str;
+      _connectionController.add(true);
+    } catch (_) {
+      await disconnect();
+      rethrow;
+    }
+  }
+
+  void _clearState() {
+    ++_session;
+    _latestStatus = null;
+    _receivedAt = null;
+    _boundIntersectionId = null;
+    _cmdChar = null;
+    _statusChar = null;
+    for (final pending in _pending.values) {
+      if (!pending.isCompleted) {
+        pending.completeError(
+          StateError('Controller disconnected before acknowledgement.'),
+        );
       }
     }
-
-    if (_cmdChar == null || _statusChar == null) {
-      throw Exception(
-        'Traffic light BLE characteristics not found. '
-        'Check that the ESP32 is running the matching firmware '
-        '(service $kTrafficServiceUUID) and toggle the phone\'s Bluetooth '
-        'off/on once if it previously connected to an older firmware.',
-      );
-    }
-
-    await _statusChar!.setNotifyValue(true);
-    _statusChar!.lastValueStream.listen((bytes) {
-      if (bytes.isEmpty) return;
-      try {
-        final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-        _statusController.add(TrafficLightStatus.fromJson(json));
-      } catch (_) {}
-    });
+    _pending.clear();
+    if (!_disposed) _connectionController.add(false);
   }
 
   Future<void> disconnect() async {
-    await _device?.disconnect();
-    _device     = null;
-    _cmdChar    = null;
-    _statusChar = null;
+    final device = _device;
+    await _statusSub?.cancel();
+    await _deviceSub?.cancel();
+    _statusSub = null;
+    _deviceSub = null;
+    _clearState();
+    _device = null;
+    await device?.disconnect();
   }
 
-  // ── Commands ───────────────────────────────────────────────────────────────
   Future<void> _sendCommand(Map<String, dynamic> payload) async {
+    if (_sending) {
+      throw StateError('Wait for the pending controller acknowledgement.');
+    }
     if (!isConnected || _cmdChar == null) {
-      throw Exception('Not connected to traffic light.');
+      throw StateError('Not connected to a four-way controller.');
     }
-
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) throw Exception('Not logged in.');
-
-    final auth = await checkUserAuthorization();
-    if (auth['isAuthorized'] != true) {
-      throw Exception('Unauthorized: Traffic Police role required.');
+    _sending = true;
+    final session = _session;
+    String? requestId;
+    try {
+      final authorization = await checkUserAuthorization();
+      if (authorization['isAuthorized'] != true) {
+        throw StateError(authorization['reason'] as String);
+      }
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null ||
+          user.uid != authorization['uid'] ||
+          session != _session ||
+          !isConnected ||
+          _cmdChar == null) {
+        throw StateError('Session changed before the command could be sent.');
+      }
+      if (authorization['intersectionId'] != _boundIntersectionId ||
+          _latestStatus?.intersectionId != _boundIntersectionId) {
+        throw StateError(
+          'Your assigned intersection does not match this controller.',
+        );
+      }
+      if (payload['cmd'] != 'STATUS' && !isReady) {
+        throw StateError(
+          'Controller status is stale or incompatible. Refresh status before controlling signals.',
+        );
+      }
+      requestId =
+          '${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}_${++_requestCounter}';
+      final body = utf8.encode(
+        jsonEncode({
+          ...payload,
+          'v': 2,
+          'request_id': requestId,
+          'intersection': _boundIntersectionId,
+          'pass': kPolicePasscode,
+          'role': authorization['role'],
+          'uid': user.uid,
+        }),
+      );
+      if (body.length >= 512 || body.length > _device!.mtuNow - 3) {
+        throw StateError('BLE payload exceeds the negotiated packet size.');
+      }
+      final completion = Completer<TrafficLightStatus>();
+      _pending[requestId] = completion;
+      final reply = completion.future
+          .timeout(const Duration(seconds: 10))
+          .then<void>((status) {
+            if (status.errorCode != null) {
+              throw StateError(
+                'Controller rejected command: ${status.errorCode}',
+              );
+            }
+            if (!status.authOk) {
+              throw StateError('Controller did not authenticate the command.');
+            }
+          });
+      await Future.wait<void>([
+        _cmdChar!
+            .write(body, withoutResponse: false)
+            .timeout(const Duration(seconds: 10)),
+        reply,
+      ], eagerError: true);
+    } on TimeoutException {
+      // No retry: a command may have executed even if its reply was lost.
+      _receivedAt = null;
+      throw StateError(
+        'Controller acknowledgement timed out. Refresh status; the command outcome is unknown.',
+      );
+    } finally {
+      if (requestId != null) _pending.remove(requestId);
+      _sending = false;
     }
-
-    final body = {
-      ...payload,
-      'pass': kPolicePasscode,
-      'role': auth['role'],
-      'uid':  user.uid,
-    };
-
-    await _cmdChar!.write(utf8.encode(jsonEncode(body)), withoutResponse: false);
   }
 
-  Future<void> setRed()    => _sendCommand({'cmd': 'RED'});
-  Future<void> setYellow() => _sendCommand({'cmd': 'YELLOW'});
-  Future<void> setGreen()  => _sendCommand({'cmd': 'GREEN'});
-
+  Future<void> setDirectionLight({
+    required String direction,
+    required String light,
+  }) => _sendCommand(TrafficLightCommand.set(direction, light));
+  Future<void> setAllRed() => _sendCommand({'cmd': 'ALL_RED'});
   Future<void> setAutoMode({
     required int greenSec,
     required int yellowSec,
-    required int redSec,
-  }) => _sendCommand({
-    'cmd':        'AUTO',
-    'green_sec':  greenSec,
-    'yellow_sec': yellowSec,
-    'red_sec':    redSec,
-  });
-
+    required int allRedSec,
+  }) => _sendCommand(
+    TrafficLightCommand.automatic(
+      greenSec: greenSec,
+      yellowSec: yellowSec,
+      allRedSec: allRedSec,
+    ),
+  );
   Future<void> setManualMode() => _sendCommand({'cmd': 'MANUAL'});
   Future<void> requestStatus() => _sendCommand({'cmd': 'STATUS'});
 
   void dispose() {
-    stopAutoConnect();
-    _statusController.close();
-    disconnect();
+    if (_disposed) return;
+    unawaited(stopAutoConnect());
+    unawaited(disconnect());
+    _disposed = true;
+    unawaited(_statusController.close());
+    unawaited(_connectionController.close());
   }
 }
