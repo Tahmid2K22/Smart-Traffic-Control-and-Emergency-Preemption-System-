@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "traffic": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}

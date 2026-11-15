@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Location - needed for BLE scanning on all Android versions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Location is used by maps and by BLE scanning on Android <= 11. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 

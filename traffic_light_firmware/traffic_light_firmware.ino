@@ -1,595 +1,403 @@
-/* Four-way BLE safety prototype. See docs/traffic_light_firmware.md.
- * Classic ESP32 only; NOT certified for public roads or mains wiring.
- * BLE callbacks only enqueue packets/lifecycle flags. loop() owns the controller,
- * JSON parsing, status characteristic, and all GPIO writes.
+/*
+ * ESP32 Four-Way Traffic Light — Firebase Realtime Database control.
+ * Simple version: Wi-Fi + RTDB only (no Bluetooth). Library: ArduinoJson.
+ *
+ * ── CONFIGURE BEFORE FLASHING ──────────────────────────────────────────────
+ * 1. WIFI_SSID / WIFI_PASSWORD      — your 2.4 GHz Wi-Fi
+ * 2. DB_URL                         — Firebase console > Realtime Database URL
+ * 3. DB_SECRET                      — Project settings > Service accounts >
+ *                                     Database secrets (legacy token)
+ * 4. INTERSECTION_ID                — any id you like (also used by the app)
+ *
+ * How it stays cheap on Firebase:
+ *  - The board holds ONE persistent SSE stream on the command node.
+ *    Commands arrive instantly. No polling, no extra reads.
+ *  - The app writes only when a button is pressed.
+ *  - The board writes status only when it changes, plus a small
+ *    heartbeat every STATUS_INTERVAL_MS (default 5 s).
+ *
+ * Data model (Realtime Database):
+ *   traffic/<INTERSECTION_ID>/command = {
+ *     "action": "green" | "allred" | "auto",
+ *     "direction": "north|east|south|west",   // green only
+ *     "green_sec": 30, "yellow_sec": 3, "all_red_sec": 2,  // auto only
+ *     "id": <millisecond timestamp from the app>  // dedup counter
+ *   }
+ *   traffic/<INTERSECTION_ID>/status  = {
+ *     "mode": "auto|manual",
+ *     "phase": "green|yellow|all_red",
+ *     "lights": {"north":"red","east":"green","south":"red","west":"red"},
+ *     "updated": <unix seconds>,
+ *     "seq": <counter>
+ *   }
+ *
+ * Safety rules: boot and reconnect go all-red/manual; at most one direction
+ * is ever non-red; direction changes always run yellow -> all-red -> green;
+ * commands older than the last processed one are ignored.
+ *
+ * Bench prototype only. Not certified for real roads or mains wiring.
  */
-#include <cstddef>
-#include <cstdint>
-#include <string>
 
-namespace traffic {
-
-enum class Direction { North, East, South, West, None };
-enum class Light { Red, Yellow, Green };
-enum class Mode { Manual, Auto };
-enum class Phase { Green, Yellow, AllRed };
-
-inline const char* name(Direction d) {
-  switch (d) {
-    case Direction::North: return "north";
-    case Direction::East: return "east";
-    case Direction::South: return "south";
-    case Direction::West: return "west";
-    default: return "";
-  }
-}
-inline const char* name(Light l) {
-  return l == Light::Green ? "green" : l == Light::Yellow ? "yellow" : "red";
-}
-inline const char* name(Mode m) { return m == Mode::Auto ? "auto" : "manual"; }
-inline const char* name(Phase p) {
-  return p == Phase::Green ? "green" : p == Phase::Yellow ? "yellow" : "all_red";
-}
-inline Direction direction(const std::string& s) {
-  for (int i = 0; i < 4; ++i)
-    if (s == name(static_cast<Direction>(i))) return static_cast<Direction>(i);
-  return Direction::None;
-}
-
-// Framing only, not a JSON parser. ArduinoJson validates syntax afterwards.
-// Reject trailing documents/junk and raw NULs instead of accepting a prefix.
-inline bool singleObjectFrame(const char* data, size_t size) {
-  bool started = false, closed = false, quoted = false, escaped = false;
-  unsigned depth = 0;
-  for (size_t i = 0; i < size; ++i) {
-    const unsigned char c = static_cast<unsigned char>(data[i]);
-    const bool whitespace = c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    if (!c) return false;
-    if (!started) {
-      if (whitespace) continue;
-      if (c != '{') return false;
-      started = true;
-      depth = 1;
-      continue;
-    }
-    if (closed) { if (!whitespace) return false; continue; }
-    if (quoted) {
-      if (c < 0x20) return false;
-      if (escaped) escaped = false;
-      else if (c == '\\') escaped = true;
-      else if (c == '"') quoted = false;
-    } else {
-      if (c == '"') quoted = true;
-      else if (c == '{' || c == '[') ++depth;
-      else if (c == '}' || c == ']') {
-        if (!depth) return false;
-        if (--depth == 0) { if (c != '}') return false; closed = true; }
-      } else if (c < 0x20 && !whitespace) return false;
-    }
-  }
-  return started && closed && !quoted;
-}
-
-struct Command {
-  int version = 0;
-  std::string cmd, requestId, intersection, pass, role, uid, direction, light;
-  int greenSec = 0, yellowSec = 0, allRedSec = 0;
-};
-
-// All methods are called by one owner (the Arduino loop), never BLE callbacks.
-// Unsigned elapsed arithmetic supports millis() rollover. Call at least once
-// per 2^32 milliseconds; each late tick advances at most one safety phase.
-class Controller {
- public:
-  static constexpr uint32_t ManualTimeoutMs = 120000;
-
-  Controller(std::string intersection, std::string pass, uint32_t now = 0)
-      : intersection_(intersection), pass_(pass), lastNow_(now),
-        phaseStart_(now), lastControl_(now) {}
-
-  bool configured() const {
-    // Bound configuration so even maximally escaped 32-byte request IDs fit
-    // in the <512-byte status envelope. These are Firestore document IDs,
-    // not display names; all four documented seed IDs satisfy this rule.
-    if (intersection_.empty() || intersection_ == "UNCONFIGURED" ||
-        intersection_.size() > 32) return false;
-    for (char c : intersection_)
-      if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
-    return true;
-  }
-
-  bool execute(const Command& c, uint32_t now) {
-    clock(now);
-    // Complete validation before changing authorization, timing or outputs.
-    if (c.requestId.empty() || c.requestId.size() > 32)
-      return reject("", "invalid_request_id");
-    if (c.version != 2) return reject(c.requestId, "invalid_version");
-    if (c.pass != pass_ || c.role != "traffic_police" || c.uid.empty())
-      return reject(c.requestId, "unauthorized");
-    if (c.cmd != "STATUS") {
-      if (!configured()) return reject(c.requestId, "unconfigured");
-      if (c.intersection != intersection_)
-        return reject(c.requestId, "intersection_mismatch");
-    }
-    const bool set = c.cmd == "SET";
-    const bool automatic = c.cmd == "AUTO";
-    if (!set && !automatic && c.cmd != "ALL_RED" && c.cmd != "MANUAL" &&
-        c.cmd != "STATUS") return reject(c.requestId, "unknown_command");
-    Direction requested = traffic::direction(c.direction);
-    if (set && requested == Direction::None)
-      return reject(c.requestId, "invalid_direction");
-    if (set && c.light != "red" && c.light != "yellow" && c.light != "green")
-      return reject(c.requestId, "invalid_light");
-    if (automatic && (c.greenSec < 5 || c.greenSec > 300 ||
-                      c.yellowSec < 3 || c.yellowSec > 60 ||
-                      c.allRedSec < 2 || c.allRedSec > 60))
-      return reject(c.requestId, "invalid_timing");
-    if ((set || automatic) && busy()) return reject(c.requestId, "busy");
-    if (set && c.light == "yellow" &&
-        (phase_ != Phase::Green || active_ != requested))
-      return reject(c.requestId, "inactive_yellow");
-
-    auth_ = true;
-    ack_ = c.requestId;
-    error_.clear();
-    if (c.cmd != "STATUS") {
-      lastControl_ = now;
-      manualArmed_ = true;
-      if (c.cmd == "ALL_RED" || c.cmd == "MANUAL") {
-        safeIdle(now);
-      } else if (automatic) {
-        greenMs_ = static_cast<uint32_t>(c.greenSec) * 1000;
-        yellowMs_ = static_cast<uint32_t>(c.yellowSec) * 1000;
-        allRedMs_ = static_cast<uint32_t>(c.allRedSec) * 1000;
-        mode_ = Mode::Auto;
-        transfer(Direction::North, now);
-      } else {
-        mode_ = Mode::Manual;
-        if (c.light == "green") {
-          if (phase_ != Phase::Green || active_ != requested)
-            transfer(requested, now);
-        } else if (phase_ == Phase::Green && active_ == requested) {
-          transfer(Direction::None, now);
-        }
-        // Red on an inactive direction is an output no-op, but switches to
-        // manual and starts the inactivity timer like every accepted control.
-      }
-    }
-    ++seq_;
-    return true;
-  }
-
-  void tick(uint32_t now) {
-    clock(now);
-    if (mode_ == Mode::Manual && manualArmed_ &&
-        elapsed(now, lastControl_) >= ManualTimeoutMs) {
-      safeIdle(now);
-      manualArmed_ = false;
-      ++seq_;
-      return;
-    }
-    if (phase_ == Phase::Green && mode_ == Mode::Auto &&
-        elapsed(now, phaseStart_) >= greenMs_) {
-      transfer(static_cast<Direction>((static_cast<int>(active_) + 1) % 4), now);
-      ++seq_;
-    } else if (phase_ == Phase::Yellow &&
-               elapsed(now, phaseStart_) >= yellowMs_) {
-      active_ = Direction::None;
-      phase_ = Phase::AllRed;
-      phaseStart_ = now;
-      clearance_ = true;
-      ++seq_;
-    } else if (phase_ == Phase::AllRed && clearance_ &&
-               elapsed(now, phaseStart_) >= allRedMs_) {
-      clearance_ = false;
-      active_ = pending_;
-      pending_ = Direction::None;
-      if (active_ != Direction::None) phase_ = Phase::Green;
-      phaseStart_ = now;
-      ++seq_;
-    }
-  }
-
-  void disconnect(uint32_t now) {
-    clock(now);
-    safeIdle(now);
-    manualArmed_ = false;
-    auth_ = false;
-    ack_.clear();
-    error_.clear();
-    ++seq_;
-  }
-
-  // Transport errors acknowledge any recoverable valid ID without executing
-  // commands. They do not authorize a session or renew control timeouts.
-  bool reject(const std::string& id, const std::string& error) {
-    ack_ = id.size() <= 32 ? id : "";
-    error_ = error;
-    ++seq_;
-    return false;
-  }
-  void heartbeat(uint32_t now) { clock(now); ++seq_; }
-
-  Light light(Direction d) const {
-    if (d == Direction::None || d != active_) return Light::Red;
-    return phase_ == Phase::Green ? Light::Green : Light::Yellow;
-  }
-  bool busy() const { return phase_ == Phase::Yellow || clearance_; }
-  Mode mode() const { return mode_; }
-  Phase phase() const { return phase_; }
-  Direction target() const {
-    return phase_ == Phase::Green ? active_ : pending_;
-  }
-  bool auth() const { return auth_; }
-  uint32_t seq() const { return seq_; }
-  uint64_t uptime() const { return uptimeMs_ / 1000; }
-  const std::string& intersection() const { return intersection_; }
-  const std::string& ack() const { return ack_; }
-  const std::string& error() const { return error_; }
-
- private:
-  static uint32_t elapsed(uint32_t now, uint32_t since) { return now - since; }
-  void clock(uint32_t now) {
-    uptimeMs_ += elapsed(now, lastNow_);
-    lastNow_ = now;
-  }
-  void safeIdle(uint32_t now) {
-    mode_ = Mode::Manual;
-    phase_ = Phase::AllRed;
-    active_ = pending_ = Direction::None;
-    clearance_ = false;
-    phaseStart_ = now;
-  }
-  void transfer(Direction next, uint32_t now) {
-    pending_ = next;
-    phaseStart_ = now;
-    if (phase_ == Phase::Green) {
-      phase_ = Phase::Yellow;
-    } else {
-      phase_ = Phase::AllRed;
-      active_ = Direction::None;
-      clearance_ = true;
-    }
-  }
-
-  std::string intersection_, pass_, ack_, error_;
-  uint32_t lastNow_, phaseStart_, lastControl_;
-  uint64_t uptimeMs_ = 0;
-  uint32_t greenMs_ = 30000, yellowMs_ = 3000, allRedMs_ = 2000, seq_ = 0;
-  Direction active_ = Direction::None, pending_ = Direction::None;
-  Mode mode_ = Mode::Manual;
-  Phase phase_ = Phase::AllRed;
-  bool clearance_ = false, auth_ = false, manualArmed_ = false;
-};
-
-}  // namespace traffic
-
-// Host tests compile the same controller without ESP32 dependencies.
-#ifndef TRAFFIC_LIGHT_HOST_TEST
 #include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLE2902.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <time.h>
 #include <ArduinoJson.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include <freertos/task.h>
-#include <cstring>
 
-#if !defined(CONFIG_IDF_TARGET_ESP32)
-#error "Pin mapping is for classic ESP32 only; audit pins before porting."
-#endif
+// ── User config ─────────────────────────────────────────────────────────────
+#define WIFI_SSID        "Redmi 12"   // your Wi-Fi name
+#define WIFI_PASSWORD    "1theke80"   // your Wi-Fi password
+#define DB_URL           "https://e-ambulance-system-001-default-rtdb.firebaseio.com"   // no trailing slash
+#define DB_SECRET        ""   // legacy database secret
+#define INTERSECTION_ID  "khulna_royal_mor"
 
-// Existing device identity, shared passcode and UUID values are preserved.
-static const char* DEVICE_NAME = "ESP32-TrafficLight";
-static const char* PASSCODE    = "TRAFFIC_POLICE_SECURE_PASS_2024";
-static const char* SERVICE_UUID = "12345678-1234-1234-1234-123456789abc";
-static const char* CMD_UUID     = "12345678-1234-1234-1234-123456789001";
-static const char* STATUS_UUID  = "12345678-1234-1234-1234-123456789002";
+#define STATUS_INTERVAL_MS  5000
+#define MANUAL_TIMEOUT_MS   120000  // idle manual control returns to all-red
 
-// Set to the actual Firestore document ID, never its display name.
-static const char INTERSECTION_ID[] = "UNCONFIGURED";
-static_assert(sizeof(INTERSECTION_ID) <= 33, "Use a document ID of at most 32 bytes");
-// Rows N,E,S,W; columns red,yellow,green. Active-high driver inputs.
-static const uint8_t PINS[4][3] = {
-  {25, 26, 27}, {14, 32, 33}, {18, 19, 21}, {22, 23, 13}
+// North, East, South, West: {red, yellow, green} — active-HIGH
+static const uint8_t LED_PINS[4][3] = {
+  {25, 26, 27},   // north
+  {14, 32, 33},   // east
+  {18, 19, 21},   // south
+  {22, 23, 13},   // west
 };
-static constexpr uint32_t STATUS_PERIOD_MS = 2000;
-static constexpr size_t PACKET_BYTES = 512;
-static constexpr UBaseType_t QUEUE_DEPTH = 8;
+static const char* const DIR_NAMES[4]   = {"north", "east", "south", "west"};
+static const char* const LIGHT_NAMES[3] = {"red", "yellow", "green"};
 
-struct Packet {
-  uint32_t epoch;
-  uint16_t size;
-  char bytes[PACKET_BYTES];
-};
-static QueueHandle_t commandQueue = nullptr;
-static portMUX_TYPE ingressMux = portMUX_INITIALIZER_UNLOCKED;
-// Protected ingress metadata is not controller/GPIO state. Epochs invalidate
-// queued packets across reconnects, including disconnect+connect between loops.
-static uint32_t ingressEpoch = 0;
-static bool ingressConnected = false, lifecycleChanged = false, overflow = false;
-static Packet overflowPacket;
-static uint32_t loopEpoch = 0;
-static bool connected = false;
-static BLECharacteristic* statusChar = nullptr;
-static traffic::Controller controller(INTERSECTION_ID, PASSCODE);
-static uint32_t lastPush = 0;
+static const char* DB_HOST = DB_URL + 8;  // strip "https://"
+
+// Path suffix: append "?auth=<secret>" only when a secret is configured.
+// With the open bench rules (docs/rtdb.traffic.rules.json) none is needed.
+static void makePath(const char* node, char* out, size_t cap) {
+  if (DB_SECRET[0] != 0) {
+    snprintf(out, cap, "/traffic/%s/%s.json?auth=%s",
+             INTERSECTION_ID, node, DB_SECRET);
+  } else {
+    snprintf(out, cap, "/traffic/%s/%s.json", INTERSECTION_ID, node);
+  }
+}
+
+// ── Signal state ────────────────────────────────────────────────────────────
+enum Phase : uint8_t { PH_ALL_RED, PH_GREEN, PH_YELLOW };
+
+static bool     autoMode = false;
+static Phase    phase    = PH_ALL_RED;
+static int8_t   active   = -1;   // direction that is green/yellow, -1 none
+static int8_t   pending  = -1;   // direction that becomes green next, -1 idle
+static uint32_t phaseStart = 0, lastControlMs = 0, lastStatusMs = 0;
+static uint32_t greenMs = 30000, yellowMs = 3000, allRedMs = 2000;
+static uint32_t seq = 0;
+static long long lastCmdId = 0;
+static bool     statusDirty = true;
+
+static WiFiClientSecure streamClient;
+static bool     streamUp = false;
+static char     lineBuf[600];
+static size_t   lineLen = 0;
+static char     sseData[600];
+static bool     sseHasData = false;
+
+static bool busy() { return phase == PH_YELLOW || (phase == PH_ALL_RED && pending >= 0); }
+
+static int dirIndex(const char* s) {
+  for (int i = 0; i < 4; ++i) if (!strcmp(s, DIR_NAMES[i])) return i;
+  return -1;
+}
 
 static void applyOutputs() {
-  static bool initialized = false;
-  static traffic::Light applied[4];
-  bool changed = !initialized;
-  for (int d = 0; d < 4; ++d)
-    if (applied[d] != controller.light(static_cast<traffic::Direction>(d))) changed = true;
-  if (!changed) return;  // Rejections/heartbeats must not pulse active lamps.
-  for (int d = 0; d < 4; ++d)
-    applied[d] = controller.light(static_cast<traffic::Direction>(d));
-  initialized = true;
-  // Break before make, including the physical write ordering. No callback can
-  // interleave a different desired state while these GPIO writes are in flight.
   for (int d = 0; d < 4; ++d) {
-    digitalWrite(PINS[d][1], LOW);
-    digitalWrite(PINS[d][2], LOW);
-  }
-  for (int d = 0; d < 4; ++d) {
-    const traffic::Light light = controller.light(static_cast<traffic::Direction>(d));
-    digitalWrite(PINS[d][0], light == traffic::Light::Red ? HIGH : LOW);
-  }
-  for (int d = 0; d < 4; ++d) {
-    const traffic::Light light = controller.light(static_cast<traffic::Direction>(d));
-    if (light == traffic::Light::Yellow) digitalWrite(PINS[d][1], HIGH);
-    if (light == traffic::Light::Green) digitalWrite(PINS[d][2], HIGH);
+    int light = 0;  // red
+    if (d == active) light = (phase == PH_GREEN) ? 2 : (phase == PH_YELLOW ? 1 : 0);
+    for (int l = 0; l < 3; ++l) digitalWrite(LED_PINS[d][l], l == light ? HIGH : LOW);
   }
 }
 
-static void publishStatus(uint32_t now) {
+// ── State changes ───────────────────────────────────────────────────────────
+static void goAllRedIdle() {
+  active = -1;
+  pending = -1;
+  phase = PH_ALL_RED;
   applyOutputs();
-#if ARDUINOJSON_VERSION_MAJOR >= 7
-  JsonDocument doc;
-#else
-  StaticJsonDocument<1536> doc;
-#endif
-  doc["v"] = 2;
-  doc["intersection"] = INTERSECTION_ID;
-  for (int d = 0; d < 4; ++d) {
-    const auto dir = static_cast<traffic::Direction>(d);
-    doc["lights"][traffic::name(dir)] = traffic::name(controller.light(dir));
-  }
-  doc["mode"] = traffic::name(controller.mode());
-  doc["phase"] = traffic::name(controller.phase());
-  doc["target"] = traffic::name(controller.target());
-  doc["uptime"] = controller.uptime();
-  doc["auth"] = controller.auth();
-  doc["seq"] = controller.seq();
-  doc["ack"] = controller.ack().c_str();
-  doc["error"] = controller.error().c_str();
-  char payload[PACKET_BYTES];
-  size_t size;
-  if (doc.overflowed() || measureJson(doc) >= sizeof(payload)) {
-    // Fail closed, but still replace READ with a truthful, bounded snapshot.
-    controller.disconnect(now);
-    controller.reject("", "status_failure");
-    applyOutputs();
-    size = snprintf(payload, sizeof(payload),
-        "{\"v\":2,\"intersection\":\"%s\",\"lights\":{\"north\":\"red\","
-        "\"east\":\"red\",\"south\":\"red\",\"west\":\"red\"},\"mode\":\"manual\","
-        "\"phase\":\"all_red\",\"target\":\"\",\"uptime\":%llu,\"auth\":false,"
-        "\"seq\":%lu,\"ack\":\"\",\"error\":\"status_failure\"}",
-        INTERSECTION_ID, static_cast<unsigned long long>(controller.uptime()),
-        static_cast<unsigned long>(controller.seq()));
-    Serial.println("[FAULT] Status serialization failed; outputs all red");
+  statusDirty = true;
+}
+
+static void startTransfer(int next) {
+  if (phase == PH_GREEN) {
+    phase = PH_YELLOW;         // current green gets yellow first
   } else {
-    size = serializeJson(doc, payload, sizeof(payload));
+    phase = PH_ALL_RED;        // idle: fresh all-red clearance
   }
-  if (statusChar) {
-    // READ is refreshed even without a connected/subscribed client.
-    statusChar->setValue(reinterpret_cast<uint8_t*>(payload), size);
-    if (connected) statusChar->notify();
-  }
-  lastPush = now;
-}
-
-static bool stringField(JsonVariantConst value, std::string& out) {
-  if (!value.is<const char*>()) return false;
-  const JsonString s = value.as<JsonString>();
-  // Embedded NULs must not turn a mismatched pass/id into a matching prefix.
-  if (!s.c_str() || strlen(s.c_str()) != s.size()) return false;
-  out.assign(s.c_str(), s.size());
-  return true;
-}
-
-static bool decode(const Packet& packet, traffic::Command& c, const char*& error) {
-  error = "malformed_json";
-  if (packet.size == 0 || packet.size >= PACKET_BYTES) {
-    error = "invalid_packet_size";
-    return false;
-  }
-#if ARDUINOJSON_VERSION_MAJOR >= 7
-  JsonDocument doc;
-#else
-  StaticJsonDocument<2048> doc;
-#endif
-  if (!traffic::singleObjectFrame(packet.bytes, packet.size)) return false;
-  if (deserializeJson(doc, packet.bytes, packet.size,
-                      DeserializationOption::NestingLimit(4)) || !doc.is<JsonObject>())
-    return false;
-  // Recover a valid ID even when another field has the wrong type.
-  stringField(doc["request_id"], c.requestId);
-  if (c.requestId.empty() || c.requestId.size() > 32) {
-    c.requestId.clear();
-    error = "invalid_request_id";
-    return false;
-  }
-  error = "invalid_fields";
-  if (!doc["v"].is<int>() || !stringField(doc["cmd"], c.cmd) ||
-      !stringField(doc["intersection"], c.intersection) ||
-      !stringField(doc["pass"], c.pass) || !stringField(doc["role"], c.role) ||
-      !stringField(doc["uid"], c.uid)) return false;
-  c.version = doc["v"].as<int>();
-  if (c.cmd == "SET" && (!stringField(doc["direction"], c.direction) ||
-                          !stringField(doc["light"], c.light))) return false;
-  if (c.cmd == "AUTO") {
-    if (!doc["green_sec"].is<int>() || !doc["yellow_sec"].is<int>() ||
-        !doc["all_red_sec"].is<int>()) return false;
-    c.greenSec = doc["green_sec"].as<int>();
-    c.yellowSec = doc["yellow_sec"].as<int>();
-    c.allRedSec = doc["all_red_sec"].as<int>();
-  }
-  return true;
-}
-
-class ServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer*) override {
-    portENTER_CRITICAL(&ingressMux);
-    ++ingressEpoch;
-    ingressConnected = true;
-    lifecycleChanged = true;
-    portEXIT_CRITICAL(&ingressMux);
-  }
-  void onDisconnect(BLEServer*) override {
-    portENTER_CRITICAL(&ingressMux);
-    ++ingressEpoch;
-    ingressConnected = false;
-    lifecycleChanged = true;
-    portEXIT_CRITICAL(&ingressMux);
-  }
-};
-
-class CommandCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* characteristic) override {
-    // auto supports core 2.x std::string and core 3.x Arduino String getValue().
-    const auto raw = characteristic->getValue();
-    Packet packet = {};
-    packet.size = raw.length() >= PACKET_BYTES ? PACKET_BYTES : raw.length();
-    if (packet.size < PACKET_BYTES)
-      memcpy(packet.bytes, raw.c_str(), packet.size);
-    portENTER_CRITICAL(&ingressMux);
-    packet.epoch = ingressEpoch;
-    if (ingressConnected && !overflow &&
-        xQueueSend(commandQueue, &packet, 0) != pdTRUE) {
-      overflow = true;
-      overflowPacket = packet;
-      // Invalidate queued controls immediately, including an in-flight decode.
-      ++ingressEpoch;
-    }
-    portEXIT_CRITICAL(&ingressMux);
-  }
-};
-
-static void serviceIngress(uint32_t now) {
-  bool changed, fault;
-  Packet failed = {};
-  portENTER_CRITICAL(&ingressMux);
-  changed = lifecycleChanged;
-  fault = overflow;
-  connected = ingressConnected;
-  loopEpoch = ingressEpoch;
-  lifecycleChanged = false;
-  overflow = false;
-  if (fault) failed = overflowPacket;
-  portEXIT_CRITICAL(&ingressMux);
-  if (changed || fault) {
-    controller.disconnect(now);
-    if (fault && failed.epoch + 1 == loopEpoch) {
-      traffic::Command c;
-      const char* ignored;
-      decode(failed, c, ignored);
-      controller.reject(c.requestId, "queue_full");
-    }
-    publishStatus(now);
-    if (!connected) BLEDevice::startAdvertising();
-  }
-}
-
-static bool currentPacket(const Packet& packet) {
-  portENTER_CRITICAL(&ingressMux);
-  const bool current = ingressConnected && !lifecycleChanged && !overflow &&
-                       packet.epoch == ingressEpoch;
-  portEXIT_CRITICAL(&ingressMux);
-  return current;
-}
-
-void setup() {
-  Serial.begin(115200);
-  // First disable every output; then assert all reds before enabling BLE.
-  for (int d = 0; d < 4; ++d) {
-    for (int l = 0; l < 3; ++l) {
-      digitalWrite(PINS[d][l], LOW);
-      pinMode(PINS[d][l], OUTPUT);
-    }
-  }
+  phaseStart = millis();
+  pending = next;
   applyOutputs();
-  // Invalid deployment IDs must not create an oversized status envelope.
-  if (!controller.configured() && strcmp(INTERSECTION_ID, "UNCONFIGURED") != 0) {
-    Serial.println("[FAULT] ID must be 1..32 ASCII letters/digits/_/-; all red");
+  statusDirty = true;
+}
+
+static void executeAction(const JsonObject& cmd) {
+  const char* action = cmd["action"] | "";
+  const char* dir = cmd["direction"] | "";
+  long long id = cmd["id"] | 0LL;
+  if (action[0] == 0 || id == 0) return;
+  if (id <= lastCmdId) return;  // stale or replayed command
+  lastCmdId = id;
+  lastControlMs = millis();
+  Serial.printf("[traffic] command: %s %s (id=%lld)\n", action, dir, id);
+
+  if (!strcmp(action, "allred")) {
+    autoMode = false;
+    goAllRedIdle();
     return;
   }
-  commandQueue = xQueueCreate(QUEUE_DEPTH, sizeof(Packet));
-  if (!commandQueue) {
-    Serial.println("[FAULT] Queue allocation failed; all red, BLE disabled");
+  if (!strcmp(action, "auto")) {
+    if (busy()) return;        // never interrupt a change mid-way
+    // Optional timing; out-of-range values reject the whole command.
+    long g = cmd["green_sec"] | 30L;
+    long y = cmd["yellow_sec"] | 3L;
+    long a = cmd["all_red_sec"] | 2L;
+    if (g < 5 || g > 300 || y < 3 || y > 60 || a < 2 || a > 60) return;
+    greenMs = g * 1000UL;
+    yellowMs = y * 1000UL;
+    allRedMs = a * 1000UL;
+    autoMode = true;
+    startTransfer(0);          // fresh all-red, then north, E, S, W, ...
     return;
   }
-  BLEDevice::init(DEVICE_NAME);
-  BLEDevice::setMTU(517);
-  BLEServer* server = BLEDevice::createServer();
-  server->setCallbacks(new ServerCallbacks());
-  BLEService* service = server->createService(SERVICE_UUID);
-  BLECharacteristic* cmdChar = service->createCharacteristic(
-      CMD_UUID, BLECharacteristic::PROPERTY_WRITE);
-  cmdChar->setCallbacks(new CommandCallbacks());
-  statusChar = service->createCharacteristic(
-      STATUS_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  statusChar->addDescriptor(new BLE2902());
-  controller.heartbeat(millis());
-  publishStatus(millis());
-  service->start();
-  BLEAdvertising* adv = BLEDevice::getAdvertising();
-  adv->addServiceUUID(SERVICE_UUID);
-  adv->setScanResponse(true);
-  BLEDevice::startAdvertising();
+  if (!strcmp(action, "green")) {
+    if (busy()) return;
+    int d = dirIndex(dir);
+    if (d < 0) return;
+    autoMode = false;
+    if (phase == PH_GREEN && d == active) return;  // already green: no-op
+    startTransfer(d);
+    return;
+  }
+}
+
+// ── Status upload (PUT; only when changed or on heartbeat) ──────────────────
+static void publishStatus() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  char path[160];
+  makePath("status", path, sizeof(path));
+
+  String body = "{\"mode\":\"";
+  body += autoMode ? "auto" : "manual";
+  body += "\",\"phase\":\"";
+  body += phase == PH_GREEN ? "green" : (phase == PH_YELLOW ? "yellow" : "all_red");
+  body += "\",\"lights\":{";
+  for (int d = 0; d < 4; ++d) {
+    int light = 0;
+    if (d == active) light = (phase == PH_GREEN) ? 2 : (phase == PH_YELLOW ? 1 : 0);
+    if (d) body += ',';
+    body += '"';
+    body += DIR_NAMES[d];
+    body += "\":\"";
+    body += LIGHT_NAMES[light];
+    body += '"';
+  }
+  body += "},\"updated\":";
+  body += (long long)time(nullptr);
+  body += ",\"seq\":";
+  body += (uint32_t)++seq;
+  body += '}';
+
+  WiFiClientSecure client;
+  client.setInsecure();  // bench prototype; pin a CA cert for production
+  if (!client.connect(DB_HOST, 443)) return;
+  client.printf("PUT %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\n"
+                "Content-Length: %d\r\nConnection: close\r\n\r\n%s",
+                path, DB_HOST, body.length(), body.c_str());
+  // Drain just the status line; the socket is discarded right after.
+  String statusLine = client.readStringUntil('\n');
+  client.stop();
+  (void)statusLine;
+}
+
+// ── SSE stream (one persistent connection to the command node) ──────────────
+static bool streamStart() {
+  streamClient.stop();
+  lineLen = 0;
+  sseHasData = false;
+
+  streamClient.setInsecure();  // bench prototype; pin a CA cert for production
+  if (!streamClient.connect(DB_HOST, 443)) {
+    Serial.println("[traffic] stream: TLS connect failed");
+    return false;
+  }
+
+  char path[160];
+  makePath("command", path, sizeof(path));
+  streamClient.printf("GET %s HTTP/1.1\r\nHost: %s\r\n"
+                      "Accept: text/event-stream\r\nConnection: keep-alive\r\n\r\n",
+                      path, DB_HOST);
+
+  // Read response headers.
+  bool ok = false;
+  while (streamClient.connected()) {
+    String line = streamClient.readStringUntil('\n');
+    line.trim();
+    if (line.isEmpty()) break;
+    if (line.startsWith("HTTP/") && line.indexOf(" 200 ") >= 0) ok = true;
+  }
+  if (!ok) {
+    Serial.println("[traffic] stream: bad HTTP response");
+    streamClient.stop();
+    return false;
+  }
+
+  Serial.println("[traffic] stream: listening for commands");
+
+  // The current command value is delivered as the first "put" event;
+  // lastCmdId dedup decides whether it is a replay or a real command.
+  streamUp = true;
+  return true;
+}
+
+// Firebase RTDB EventSource sends plain raw SSE bytes: no Content-Length and
+// no chunked transfer encoding, just "event:/data:" lines until disconnect.
+static int nextByte() {
+  if (!streamClient.connected()) return -1;
+  if (streamClient.available() == 0) return -2;  // alive, nothing to read yet
+  return streamClient.read();
+}
+
+static void sseDispatch() {
+  if (!sseHasData) return;
+  sseHasData = false;
+  if (!strcmp(sseData, "null") || sseData[0] == 0) return;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, sseData);
+  if (err) {
+    Serial.printf("[traffic] parse failed: %s\n", err.c_str());
+    return;
+  }
+  long long id = doc["data"]["id"] | 0LL;  // 0LL: ids are 13-digit timestamps
+  if (id == 0) return;
+  // The connect-time "put" replays whatever command node value is stored.
+  // A freshly booted board must start all-red, so ignore commands that were
+  // created before boot (older than 60 s ago). Newer ones still execute.
+  static bool firstPutSeen = false;
+  if (!firstPutSeen) {
+    firstPutSeen = true;
+    long long nowSec = (long long)time(nullptr);
+    if (nowSec < 1700000000LL || id < nowSec * 1000 - 60000) {
+      lastCmdId = id;  // remember it so a reconnect replay is skipped too
+      Serial.println("[traffic] ignoring pre-boot command (staying all-red)");
+      return;
+    }
+  }
+  JsonObject data = doc["data"].as<JsonObject>();
+  if (data.isNull()) return;
+  executeAction(data);
+}
+
+static void streamLoop() {
+  if (!streamUp && !streamStart()) return;  // retried on every loop pass
+
+  while (true) {
+    if (!streamClient.connected()) { streamUp = false; break; }
+    int c = nextByte();
+    if (c == -2) break;                // connection alive, no data right now
+    if (c < 0) { streamUp = false; break; }  // socket closed: reconnect
+    if (c == '\n') {
+      lineBuf[lineLen] = 0;
+      if (lineLen == 0) {
+        sseDispatch();                        // blank line ends the event
+      } else if (!strncmp(lineBuf, "data:", 5)) {
+        const char* p = lineBuf + 5;
+        while (*p == ' ') ++p;
+        strncpy(sseData, p, sizeof(sseData) - 1);
+        sseData[sizeof(sseData) - 1] = 0;
+        sseHasData = true;
+      }
+      lineLen = 0;
+    } else if (c != '\r') {
+      if (lineLen + 1 < sizeof(lineBuf)) lineBuf[lineLen++] = (char)c;
+      else lineLen = 0;                       // oversize line: drop it
+    }
+  }
+  if (!streamClient.connected()) streamUp = false;
+}
+
+// ── Setup / loop ────────────────────────────────────────────────────────────
+void setup() {
+  for (auto& row : LED_PINS)
+    for (int pin : row) {
+      pinMode(pin, OUTPUT);
+      digitalWrite(pin, LOW);
+    }
+
+  Serial.begin(115200);
+  Serial.printf("\n[traffic] intersection=%s\n", INTERSECTION_ID);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("[traffic] connecting Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print('.');
+  }
+  Serial.printf(" ok, %s\n", WiFi.localIP().toString().c_str());
+
+  // NTP for absolute timestamps in status — must come AFTER Wi-Fi is up,
+  // otherwise the SNTP UDP socket races the lwIP stack and can assert-crash.
+  configTime(6 * 3600, 0, "pool.ntp.org", "time.nist.gov");  // GMT+6 Dhaka
+
+  applyOutputs();  // boot: all red, manual
+  publishStatus();
 }
 
 void loop() {
-  if (!statusChar) {
-    vTaskDelay(1);  // Setup fault: remain all red, no commands accepted.
+  uint32_t now = millis();
+
+  // Wi-Fi upkeep.
+  if (WiFi.status() != WL_CONNECTED) {
+    streamUp = false;
+    WiFi.reconnect();
+    delay(1000);
     return;
   }
-  serviceIngress(millis());
-  uint32_t now = millis();
-  const uint32_t before = controller.seq();
-  controller.tick(now);
-  if (controller.seq() != before) publishStatus(now);
 
-  Packet packet;
-  // A bounded batch prevents writes from starving timers/disconnect handling.
-  for (UBaseType_t i = 0; i < QUEUE_DEPTH &&
-       xQueueReceive(commandQueue, &packet, 0) == pdTRUE; ++i) {
-    serviceIngress(millis());
-    if (!connected || packet.epoch != loopEpoch) continue;
-    traffic::Command command;
-    const char* error;
-    const bool valid = decode(packet, command, error);
-    if (!currentPacket(packet)) continue;
-    now = millis();
-    // A packet parse can straddle a deadline; safety timers take priority.
-    const uint32_t seq = controller.seq();
-    controller.tick(now);
-    if (controller.seq() != seq) publishStatus(now);
-    if (valid) controller.execute(command, now);
-    else controller.reject(command.requestId, error);
-    publishStatus(now);
-  }
-  serviceIngress(millis());
+  streamLoop();
+
+  // Re-capture: executeAction() (inside streamLoop) sets lastControlMs and
+  // phaseStart to values NEWER than the `now` captured at the top of this
+  // pass. With unsigned arithmetic, `now - those` would wrap to ~4.29e9 and
+  // falsely trigger the timeout / phase transitions on the very same pass.
   now = millis();
-  if (static_cast<uint32_t>(now - lastPush) >= STATUS_PERIOD_MS) {
-    controller.heartbeat(now);
-    publishStatus(now);
-  }
-  // Yield one scheduler tick for BLE/idle tasks, never sleep for a phase.
-  // No wait loop or phase catch-up: every clearance runs in real time.
-  vTaskDelay(1);
-}
 
-#endif  // TRAFFIC_LIGHT_HOST_TEST
+  // Phase timing: green -> yellow -> all-red -> (next green in auto).
+  if (phase == PH_GREEN && now - phaseStart >= greenMs) {
+    phase = PH_YELLOW;
+    phaseStart = now;
+    applyOutputs();
+    statusDirty = true;
+  } else if (phase == PH_YELLOW && now - phaseStart >= yellowMs) {
+    phase = PH_ALL_RED;
+    phaseStart = now;
+    if (autoMode && active >= 0) pending = (active + 1) % 4;  // N E S W cycle
+    applyOutputs();
+    statusDirty = true;
+  } else if (phase == PH_ALL_RED && pending >= 0 && now - phaseStart >= allRedMs) {
+    active = pending;
+    pending = -1;
+    phase = PH_GREEN;
+    phaseStart = now;
+    applyOutputs();
+    statusDirty = true;
+  }
+
+  // Manual control left unattended: back to all-red.
+  if (!autoMode && now - lastControlMs > MANUAL_TIMEOUT_MS &&
+      (phase != PH_ALL_RED || pending >= 0)) {
+    goAllRedIdle();
+  }
+
+  // Upload status only when it changed, or once per heartbeat interval.
+  if (statusDirty || now - lastStatusMs >= STATUS_INTERVAL_MS) {
+    statusDirty = false;
+    lastStatusMs = now;
+    publishStatus();
+  }
+}

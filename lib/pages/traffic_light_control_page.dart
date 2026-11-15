@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../services/ble_traffic_service.dart';
+import '../services/firebase_traffic_service.dart';
 
 class TrafficLightControlPage extends StatefulWidget {
-  const TrafficLightControlPage({super.key, this.service});
+  const TrafficLightControlPage({super.key, this.service, this.remoteService});
 
   final BleTrafficService? service;
+  final RemoteTrafficService? remoteService;
 
   @override
   State<TrafficLightControlPage> createState() =>
@@ -16,7 +18,36 @@ class TrafficLightControlPage extends StatefulWidget {
 
 class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
   late final BleTrafficService _ble;
-  TrafficLightStatus? _status;
+  TrafficLightStatus? _bleStatus;
+  TrafficLightStatus? _remoteAck;
+  Timer? _remoteAckTimer;
+  int _remoteBoot = 0;
+  RemoteTrafficTelemetry? _telemetry;
+  RemoteTrafficService? _remote;
+  StreamSubscription<RemoteTrafficTelemetry?>? _remoteSub;
+  StreamSubscription<String?>? _userSub;
+  int _authorizationGeneration = 0;
+
+  bool get _connectionInProgress => _connecting || _ble.isConnecting;
+  bool get _bluetoothPriority => _ble.isConnected || _connectionInProgress;
+  TrafficLightStatus? get _status =>
+      _bluetoothPriority ? _bleStatus : (_remoteAck ?? _telemetry?.status);
+  TrafficControlRoute get _route => selectTrafficRoute(
+    bleConnected: _ble.isConnected,
+    bleConnecting: _connectionInProgress,
+    bleReady:
+        _ble.isReady &&
+        _bleStatus?.intersectionId == _authorization?['intersectionId'] &&
+        _bleStatus?.supportsFourWay == true &&
+        _bleStatus?.authOk == true,
+    remoteReady:
+        _remote?.currentUid == _authorization?['uid'] &&
+        _telemetry?.isReadyFor(
+              _authorization?['intersectionId'] as String? ?? '',
+              DateTime.now(),
+            ) ==
+            true,
+  );
   Map<String, dynamic>? _authorization;
   List<TrafficLightDevice> _devices = [];
   TrafficLightDevice? _selected;
@@ -38,26 +69,73 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
 
   bool get _authorized => _authorization?['isAuthorized'] == true;
   bool get _ready =>
-      _authorized && _ble.isReady && _status != null && !_refreshing;
+      _authorized &&
+      _route != TrafficControlRoute.unavailable &&
+      !_refreshing &&
+      !_connectionInProgress;
 
   @override
   void initState() {
     super.initState();
     _ble = widget.service ?? BleTrafficService.instance;
-    _status = _ble.isConnected ? _ble.latestStatus : null;
+    _bleStatus = _ble.isConnected ? _ble.latestStatus : null;
+    // Existing BLE-only injection must never instantiate Firebase in tests.
+    _remote =
+        widget.remoteService ??
+        (widget.service == null
+            ? FirebaseTrafficService(
+                checkAuthorization: _ble.checkUserAuthorization,
+              )
+            : null);
+    _remoteSub = _remote?.telemetryStream.listen((telemetry) {
+      if (!mounted) return;
+      setState(() {
+        final previous = _telemetry;
+        final ack = _remoteAck;
+        // Compare ordered controller publications, not the independent ACK stream.
+        final rebooted =
+            telemetry != null &&
+            previous != null &&
+            (telemetry.status.uptime < previous.status.uptime ||
+                ((telemetry.status.sequence - previous.status.sequence) &
+                        0xffffffff) >
+                    0x7fffffff);
+        if (rebooted) ++_remoteBoot;
+        _telemetry = telemetry;
+        if (telemetry == null ||
+            rebooted ||
+            (ack != null &&
+                ((telemetry.status.sequence - ack.sequence) & 0xffffffff) <
+                    0x80000000)) {
+          _remoteAck = null;
+          _remoteAckTimer?.cancel();
+        }
+      });
+    });
+    _userSub = _remote?.userChanges.listen((uid) {
+      if (!mounted) return;
+      ++_authorizationGeneration;
+      setState(() {
+        _authorization = null;
+        _telemetry = null;
+        _remoteAck = null;
+        _bleStatus = null;
+        _commandNotice = null;
+      });
+      unawaited(_checkAuthorization());
+    });
     _statusSub = _ble.statusStream.listen(
       (status) {
-        if (mounted && _ble.isConnected) setState(() => _status = status);
+        if (mounted && _ble.isConnected) setState(() => _bleStatus = status);
       },
       onError: (Object error) {
-        if (mounted) setState(() => _status = null);
+        if (mounted) setState(() => _bleStatus = null);
       },
     );
     _connectionSub = _ble.connectionStream.listen((connected) {
       if (!mounted) return;
       setState(() {
-        _status = connected ? _ble.latestStatus : null;
-        _commandNotice = null;
+        _bleStatus = connected ? _ble.latestStatus : null;
         if (!connected) _selected = null;
       });
       if (connected) unawaited(_refreshStatus(silent: true));
@@ -66,9 +144,9 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
       if (!mounted) return;
       // Readiness expires even when the device stops sending notifications.
       setState(() {
-        if (!_ble.isConnected) _status = null;
+        if (!_ble.isConnected) _bleStatus = null;
       });
-      if (++_ticks % 5 == 0 && !_ble.isReady) {
+      if (++_ticks % 5 == 0 && !_connectionInProgress && !_ble.isReady) {
         unawaited(_refreshStatus(silent: true));
       }
     });
@@ -79,32 +157,59 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
   void dispose() {
     _refreshTimer?.cancel();
     _scanTimer?.cancel();
+    _remoteAckTimer?.cancel();
     unawaited(_scanSub?.cancel());
     unawaited(_statusSub?.cancel());
     unawaited(_connectionSub?.cancel());
+    unawaited(_remoteSub?.cancel());
+    unawaited(_userSub?.cancel());
+    ++_authorizationGeneration;
+    if (widget.remoteService == null) {
+      unawaited(_remote?.dispose());
+    } else {
+      unawaited(_remote?.stop());
+    }
     // The dashboard owns auto-connect and the shared connection, not this page.
     super.dispose();
   }
 
   Future<void> _checkAuthorization() async {
+    final generation = ++_authorizationGeneration;
     setState(() => _checking = true);
     try {
+      await _remote?.stop();
       final result = await _ble.checkUserAuthorization();
-      if (!mounted) return;
+      if (!mounted || generation != _authorizationGeneration) return;
+      if (_remote != null &&
+          (result['uid'] == null || result['uid'] != _remote!.currentUid)) {
+        throw StateError('User session changed. Please log in again.');
+      }
       setState(() => _authorization = result);
-      if (_authorized) unawaited(_refreshStatus(silent: true));
+      if (_authorized) {
+        if (_remote != null) {
+          await _remote!.watch(
+            intersection: result['intersectionId'] as String,
+            uid: result['uid'] as String,
+          );
+        }
+        if (!mounted || generation != _authorizationGeneration) return;
+        unawaited(_refreshStatus(silent: true));
+      }
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _authorizationGeneration) return;
       setState(() {
         _authorization = {'isAuthorized': false, 'reason': '$error'};
       });
+      unawaited(_remote?.stop());
     } finally {
-      if (mounted) setState(() => _checking = false);
+      if (mounted && generation == _authorizationGeneration) {
+        setState(() => _checking = false);
+      }
     }
   }
 
   Future<void> _startScan() async {
-    if (!_authorized || _scanning || _connecting) return;
+    if (!_authorized || _scanning || _connectionInProgress || _sending) return;
     setState(() {
       _scanning = true;
       _devices = [];
@@ -116,6 +221,10 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
       if (!mounted) return;
       await _scanSub?.cancel();
       if (!mounted) return;
+      if (_connectionInProgress) {
+        setState(() => _scanning = false);
+        return;
+      }
       _scanSub = _ble.scan().listen(
         (devices) {
           if (mounted) setState(() => _devices = devices);
@@ -149,19 +258,19 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
   }
 
   Future<void> _connect(TrafficLightDevice device) async {
-    if (!_authorized || _connecting) return;
+    if (!_authorized || _connectionInProgress || _sending) return;
     setState(() {
       _connecting = true;
       _selected = device;
-      _status = null;
+      _bleStatus = null;
       _commandNotice = null;
     });
     try {
       await _stopScan();
-      if (!mounted) return;
+      if (!mounted || _ble.isConnecting) return;
       await _ble.connect(device.device);
       if (!mounted) return;
-      setState(() => _status = _ble.latestStatus);
+      setState(() => _bleStatus = _ble.latestStatus);
       unawaited(_refreshStatus(silent: true));
     } catch (error) {
       _showMessage('Connection failed: $error');
@@ -175,7 +284,7 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
       await _ble.disconnect();
       if (mounted) {
         setState(() {
-          _status = null;
+          _bleStatus = null;
           _selected = null;
           _commandNotice = null;
         });
@@ -186,7 +295,11 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
   }
 
   Future<void> _refreshStatus({bool silent = false}) async {
-    if (!_authorized || !_ble.isConnected || _refreshing || _sending) {
+    if (!_authorized ||
+        !_ble.isConnected ||
+        _connectionInProgress ||
+        _refreshing ||
+        _sending) {
       return;
     }
     setState(() => _refreshing = true);
@@ -199,21 +312,60 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
     }
   }
 
-  Future<void> _send(Future<void> Function() command) async {
-    if (!_ready || _sending) return;
+  Future<void> _send(
+    Future<void> Function() bluetoothCommand,
+    Map<String, dynamic> remoteCommand,
+  ) async {
+    if (!_ready ||
+        _sending ||
+        (_isTransferring(_status) && remoteCommand['cmd'] != 'ALL_RED')) {
+      return;
+    }
+    final route = _route;
+    final generation = _authorizationGeneration;
+    final remoteBoot = _remoteBoot;
     setState(() {
       _sending = true;
       _commandNotice = null;
     });
     try {
-      await command();
-      if (!mounted) return;
+      if (route == TrafficControlRoute.bluetooth) {
+        await bluetoothCommand();
+      } else if (route == TrafficControlRoute.internet) {
+        final ack = await _remote!.send(
+          remoteCommand,
+          canDispatch: () =>
+              mounted &&
+              generation == _authorizationGeneration &&
+              _authorized &&
+              !_bluetoothPriority,
+        );
+        if (!mounted || generation != _authorizationGeneration) return;
+        final reported = _telemetry?.status;
+        if (remoteBoot == _remoteBoot &&
+            (reported == null ||
+                ((ack.sequence - reported.sequence) & 0xffffffff) <
+                    0x80000000)) {
+          _remoteAck = ack;
+          _remoteAckTimer?.cancel();
+          // An ACK may bridge telemetry lag, but cannot replace telemetry forever.
+          _remoteAckTimer = Timer(const Duration(seconds: 6), () {
+            if (mounted) setState(() => _remoteAck = null);
+          });
+        }
+      }
+      if (!mounted || generation != _authorizationGeneration) return;
       setState(() {
         _commandNotice =
             'Command accepted by controller. Waiting for reported state; '
             'acceptance does not mean the transition is complete.';
       });
     } catch (error) {
+      if (!mounted || generation != _authorizationGeneration) return;
+      setState(
+        () => _commandNotice =
+            '$error. No automatic retry or transport fallback.',
+      );
       _showMessage('Command failed: $error');
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -227,8 +379,19 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
   }
 
   String get _readinessMessage {
+    if (!_bluetoothPriority) {
+      if (_telemetry?.blePriority == true) {
+        return 'Controller reserves Bluetooth priority (possibly another officer). Internet controls disabled.';
+      }
+      if (_route == TrafficControlRoute.internet) {
+        return 'Ready — fresh server-reported controller status for your intersection.';
+      }
+      return 'Internet controller unavailable — waiting for fresh, matching server telemetry. '
+          'Controls disabled. Check your connection and phone automatic date/time; '
+          'clock skew can invalidate freshness checks.';
+    }
     if (!_ble.isConnected) {
-      return 'Disconnected — scan and connect to a controller.';
+      return 'Bluetooth connection reserved or connecting. Internet controls disabled.';
     }
     if (!_ble.isAuthenticated) {
       return 'Connected — waiting for controller authentication.';
@@ -261,7 +424,7 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
           if (_authorized && _ble.isConnected)
             IconButton(
               tooltip: 'Refresh device status',
-              onPressed: _refreshing || _sending
+              onPressed: _refreshing || _sending || _connectionInProgress
                   ? null
                   : () => _refreshStatus(),
               icon: const Icon(Icons.refresh),
@@ -269,7 +432,7 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
           if (_authorized && _ble.isConnected)
             IconButton(
               tooltip: 'Disconnect controller',
-              onPressed: _sending || _connecting ? null : _disconnect,
+              onPressed: _sending || _connectionInProgress ? null : _disconnect,
               icon: const Icon(Icons.bluetooth_disabled),
             ),
         ],
@@ -316,7 +479,9 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
                     leading: Icon(_ready ? Icons.verified : Icons.info_outline),
                     title: Text(_readinessMessage),
                     subtitle: Text(
-                      _selected?.name ?? 'Shared BLE controller connection',
+                      '${_bluetoothPriority ? 'Route: Bluetooth priority' : 'Route: Internet'}\n'
+                      '${_bluetoothPriority ? (_selected?.name ?? 'Shared BLE controller connection') : 'Controller transport: ${_telemetry?.transport ?? 'unknown'}'}',
+                      key: const ValueKey('traffic-control-route'),
                     ),
                   ),
                 ),
@@ -336,8 +501,9 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
                       direction: direction,
                       light: light,
                     ),
+                    TrafficLightCommand.set(direction, light),
                   ),
-                  onAllRed: () => _send(_ble.setAllRed),
+                  onAllRed: () => _send(_ble.setAllRed, {'cmd': 'ALL_RED'}),
                 ),
                 const SizedBox(height: 16),
                 _buildModeControls(),
@@ -354,9 +520,9 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text('Connect to your assigned intersection controller.'),
-            if (_connecting) const LinearProgressIndicator(),
+            if (_connectionInProgress) const LinearProgressIndicator(),
             FilledButton.icon(
-              onPressed: _connecting
+              onPressed: _connectionInProgress || _sending
                   ? null
                   : (_scanning ? _stopScan : _startScan),
               icon: const Icon(Icons.bluetooth_searching),
@@ -367,7 +533,9 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
                 title: Text(device.name),
                 subtitle: Text('${device.rssi} dBm'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: _connecting ? null : () => _connect(device),
+                onTap: _connectionInProgress || _sending
+                    ? null
+                    : () => _connect(device),
               ),
             if (_scanning && _devices.isEmpty)
               const Text('Searching for nearby controllers…'),
@@ -391,7 +559,9 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
             ),
             const SizedBox(height: 8),
             OutlinedButton(
-              onPressed: enabled ? () => _send(_ble.setManualMode) : null,
+              onPressed: enabled
+                  ? () => _send(_ble.setManualMode, {'cmd': 'MANUAL'})
+                  : null,
               child: const Text('Apply manual mode'),
             ),
             _timingSlider(
@@ -419,6 +589,11 @@ class _TrafficLightControlPageState extends State<TrafficLightControlPage> {
               onPressed: enabled
                   ? () => _send(
                       () => _ble.setAutoMode(
+                        greenSec: _greenSec,
+                        yellowSec: _yellowSec,
+                        allRedSec: _allRedSec,
+                      ),
+                      TrafficLightCommand.automatic(
                         greenSec: _greenSec,
                         yellowSec: _yellowSec,
                         allRedSec: _allRedSec,

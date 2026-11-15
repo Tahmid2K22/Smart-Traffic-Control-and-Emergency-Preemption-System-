@@ -7,6 +7,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../services/admin_service.dart';
 import '../../services/ble_traffic_service.dart';
 import '../../services/traffic_service.dart';
+import '../simple_traffic_page.dart';
 import '../traffic_light_control_page.dart';
 
 class TrafficPoliceDashboardScreen extends StatefulWidget {
@@ -226,15 +227,32 @@ class _TrafficPoliceDashboardScreenState
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor:  Colors.redAccent,
-        foregroundColor:  Colors.white,
-        icon:  const Icon(Icons.traffic_rounded),
-        label: const Text('Four-way signal control'),
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const TrafficLightControlPage()),
-        ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'rtdbSignalControl',
+            backgroundColor: Colors.indigoAccent,
+            foregroundColor: Colors.white,
+            icon: const Icon(Icons.cloud_sync_rounded),
+            label: const Text('Cloud signal control'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SimpleTrafficPage()),
+            ),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            backgroundColor:  Colors.redAccent,
+            foregroundColor:  Colors.white,
+            icon:  const Icon(Icons.traffic_rounded),
+            label: const Text('Four-way signal control'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const TrafficLightControlPage()),
+            ),
+          ),
+        ],
       ),
     );
   }

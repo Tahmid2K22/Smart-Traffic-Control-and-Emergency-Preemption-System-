@@ -1,5 +1,6 @@
 package com.ambulance.bd.ambulance_dashboard
 
+import android.os.Build
 import android.os.Bundle
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.libraries.places.api.Places
@@ -18,6 +19,14 @@ class MainActivity : FlutterActivity() {
 
 	override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
 		super.configureFlutterEngine(flutterEngine)
+		MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "e_ambulance/platform")
+			.setMethodCallHandler { call, result ->
+				when (call.method) {
+					"getAndroidSdkInt" -> result.success(Build.VERSION.SDK_INT)
+					else -> result.notImplemented()
+				}
+			}
+
 		val appInfo = packageManager.getApplicationInfo(packageName, android.content.pm.PackageManager.GET_META_DATA)
 		val apiKey = appInfo.metaData?.getString("com.google.android.geo.API_KEY")
 			?: error("Google Maps API key is missing from AndroidManifest.xml")

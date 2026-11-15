@@ -56,11 +56,11 @@ All four entries have been written to project `e-ambulance-system-001` through t
 
 ## Hardware limitations
 
-The repository now includes **four-way v2 prototype firmware**, a matching BLE protocol and directional police controls. See [traffic_light_firmware.md](traffic_light_firmware.md) for pin wiring, required intersection binding, safety transitions and flashing prerequisites. The directory alone does **not** assign physical controllers or synchronize live signal states. No hardware was flashed automatically. This prototype has no physical output feedback or public-road safety certification; hardware, security and electrical validation remain required.
+The repository now includes **single-file four-way v2 prototype firmware**, a matching BLE protocol, Firebase internet control and directional police controls with Bluetooth priority. See [traffic_light_firmware.md](traffic_light_firmware.md) for pin wiring, required intersection binding, safety transitions and flashing prerequisites. The directory alone does **not** assign physical controllers or synchronize live signal states. No hardware was flashed automatically. This prototype has no physical output feedback or public-road safety certification; hardware, security and electrical validation remain required.
 
 ## Critical deployment/security requirements
 
-The repository has **no Firestore rules file or Firestore rules configuration** (`firebase.json` only configures Flutter apps). Existing production rules are unknown. **Do not invent broad rules or deploy rules from this document.** First retrieve/review the existing rules, then merge and test a narrowly scoped change. Overlapping permissive rules can defeat a restrictive match.
+`firebase.json` still only configures Flutter apps. The new `firestore.traffic.rules` and isolated `firebase.traffic.json` cover controller telemetry/commands, not the rest of the application; **do not deploy them wholesale**. Existing production rules are unknown. First retrieve/review those rules, then merge and test a narrowly scoped change. Overlapping permissive rules can defeat a restrictive match. See [traffic rules integration](../test/firebase_rules/README.md) and [device provisioning](traffic_light_firmware.md#firebase-internet-control-and-bluetooth-priority). Controller telemetry lives in `trafficControllers/{intersectionId}`; it does not overwrite the directory's configured light records.
 
 Minimal illustrative directory match, placed inside the existing `/databases/{database}/documents` block:
 

@@ -1,0 +1,16 @@
+{
+  "_comment": "TRAFFIC-ONLY isolated test config. MERGE RULES BEFORE ANY LIVE DEPLOY: deploying this file's rules replaces the entire database ruleset. See firestore.traffic.rules header and test/firebase_rules/README.md. Do not deploy as-is.",
+  "firestore": {
+    "rules": "firestore.traffic.rules"
+  },
+  "emulators": {
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 8185
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true
+  }
+}

@@ -5,6 +5,7 @@ import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -30,8 +31,17 @@ class TrafficLightDevice {
 }
 
 class BleTrafficService {
-  BleTrafficService._();
+  BleTrafficService._() : _authorizationCheck = null;
+
+  @visibleForTesting
+  BleTrafficService.forTesting({
+    required Future<Map<String, dynamic>> Function() checkAuthorization,
+  }) : _authorizationCheck = checkAuthorization;
+
   static final BleTrafficService instance = BleTrafficService._();
+  static const _platformChannel = MethodChannel('e_ambulance/platform');
+  final Future<Map<String, dynamic>> Function()? _authorizationCheck;
+  Future<int>? _androidSdkInt;
 
   BluetoothDevice? _device;
   BluetoothCharacteristic? _cmdChar;
@@ -54,6 +64,7 @@ class BleTrafficService {
   bool _sending = false;
   bool _autoConnectEnabled = false;
   bool _autoConnecting = false;
+  int _connectionAttempts = 0;
   bool _disposed = false;
   void Function(TrafficLightDevice)? _onConnected;
   void Function()? _onDisconnected;
@@ -74,15 +85,34 @@ class BleTrafficService {
       _receivedAt != null &&
       DateTime.now().difference(_receivedAt!) <= const Duration(seconds: 6);
   bool get autoConnectEnabled => _autoConnectEnabled;
+  bool get isConnecting => _autoConnecting || _connectionAttempts > 0;
+
+  Future<int> _getAndroidSdkInt() => _androidSdkInt ??= _platformChannel
+      .invokeMethod<int>('getAndroidSdkInt')
+      .then((sdk) {
+        if (sdk == null || sdk < 1) {
+          throw StateError(
+            'Could not determine the Android version for Bluetooth.',
+          );
+        }
+        return sdk;
+      });
+
+  Future<bool> _scanRequiresLocationServices() async =>
+      !kIsWeb && Platform.isAndroid ? (await _getAndroidSdkInt()) <= 30 : true;
+
+  void _log(String message) {
+    if (kDebugMode) debugPrint('[BLE] $message');
+  }
 
   Future<bool> requestPermissions() async {
     if (kIsWeb) return false;
     if (Platform.isAndroid) {
-      final result = await [
-        Permission.bluetoothScan,
-        Permission.bluetoothConnect,
-        Permission.locationWhenInUse,
-      ].request();
+      final sdk = await _getAndroidSdkInt();
+      final permissions = sdk >= 31
+          ? [Permission.bluetoothScan, Permission.bluetoothConnect]
+          : [Permission.bluetooth, Permission.locationWhenInUse];
+      final result = await permissions.request();
       return result.values.every(
         (status) => status.isGranted || status.isLimited,
       );
@@ -92,6 +122,8 @@ class BleTrafficService {
   }
 
   Future<Map<String, dynamic>> checkUserAuthorization() async {
+    final check = _authorizationCheck;
+    if (check != null) return check();
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       return {'isAuthorized': false, 'reason': 'Please log in.'};
@@ -191,6 +223,7 @@ class BleTrafficService {
     await FlutterBluePlus.startScan(
       withServices: [Guid(kTrafficServiceUUID)],
       timeout: timeout,
+      androidCheckLocationServices: await _scanRequiresLocationServices(),
     );
     await for (final results in FlutterBluePlus.scanResults) {
       for (final result in results) {
@@ -220,7 +253,6 @@ class BleTrafficService {
       onError?.call(authorization['reason'] as String);
       return;
     }
-    _autoConnectEnabled = true;
     _autoIntersectionId = authorization['intersectionId'] as String;
     _rejectedDevices.clear();
     if (!_knownDevices.containsKey(_autoIntersectionId)) {
@@ -229,6 +261,7 @@ class BleTrafficService {
       );
       return;
     }
+    _autoConnectEnabled = true;
     if (isReady) {
       onConnected?.call(
         TrafficLightDevice(
@@ -243,16 +276,17 @@ class BleTrafficService {
   }
 
   Future<void> _runAutoScan() async {
-    if (!_autoConnectEnabled || isConnected || _autoConnecting || _disposed) {
+    if (!_autoConnectEnabled || isConnected || isConnecting || _disposed) {
       return;
     }
     try {
       await _autoScanSub?.cancel();
       await FlutterBluePlus.startScan(
         withServices: [Guid(kTrafficServiceUUID)],
+        androidCheckLocationServices: await _scanRequiresLocationServices(),
       );
       _autoScanSub = FlutterBluePlus.scanResults.listen((results) async {
-        if (!_autoConnectEnabled || _autoConnecting || isConnected) return;
+        if (!_autoConnectEnabled || isConnecting || isConnected) return;
         final candidates = results
             .where(
               (result) =>
@@ -265,8 +299,8 @@ class BleTrafficService {
         candidates.sort((a, b) => b.rssi.compareTo(a.rssi));
         final best = candidates.first;
         _autoConnecting = true;
-        await FlutterBluePlus.stopScan();
         try {
+          await FlutterBluePlus.stopScan();
           await connect(best.device);
           _onConnected?.call(_scanDevice(best));
         } catch (error) {
@@ -351,30 +385,51 @@ class BleTrafficService {
   }
 
   Future<void> connect(BluetoothDevice device) async {
-    final authorization = await checkUserAuthorization();
-    if (authorization['isAuthorized'] != true) {
-      throw StateError(authorization['reason'] as String);
+    if (_connectionAttempts > 0) {
+      throw StateError(
+        'A Bluetooth connection attempt is already in progress.',
+      );
     }
-    await disconnect();
-    final session = ++_session;
-    _device = device;
-    _boundIntersectionId = authorization['intersectionId'] as String;
+    ++_connectionAttempts;
     try {
+      await _connect(device);
+    } finally {
+      --_connectionAttempts;
+    }
+  }
+
+  Future<void> _connect(BluetoothDevice device) async {
+    var stage = 'authorization';
+    var ownsConnection = false;
+    try {
+      _log('Checking current authorization.');
+      final authorization = await checkUserAuthorization();
+      if (authorization['isAuthorized'] != true) {
+        throw StateError(authorization['reason'] as String);
+      }
+      _log('Authorization accepted.');
+      stage = 'previous connection cleanup';
+      await disconnect();
+      final session = ++_session;
+      _device = device;
+      _boundIntersectionId = authorization['intersectionId'] as String;
+      ownsConnection = true;
+      stage = 'attach';
+      _log('Attaching to selected controller.');
       await device.connect(
         license: License.nonprofit,
         autoConnect: false,
+        mtu: null, // Negotiate once below, not the plugin's default 512 first.
         timeout: const Duration(seconds: 12),
       );
-      if (!kIsWeb && Platform.isAndroid) {
-        final mtu = await device.requestMtu(517);
-        if (mtu < 515) {
-          throw StateError(
-            'Four-way telemetry requires BLE MTU 515 or greater (received $mtu).',
-          );
-        }
-      } else if (device.mtuNow < 515) {
+      stage = 'MTU negotiation';
+      final mtu = !kIsWeb && Platform.isAndroid
+          ? await device.requestMtu(517)
+          : device.mtuNow;
+      _log('MTU result: $mtu.');
+      if (mtu < 515) {
         throw StateError(
-          'This platform has not negotiated the MTU required for four-way telemetry.',
+          'Four-way telemetry requires BLE MTU 515 or greater (received $mtu).',
         );
       }
       _deviceSub = device.connectionState.listen((state) {
@@ -386,10 +441,13 @@ class BleTrafficService {
         _onDisconnected?.call();
         _scheduleAutoScan();
       });
+      stage = 'service discovery';
+      _log('Discovering traffic-light service and characteristics.');
       _findChars(await device.discoverServices());
       if (!kIsWeb &&
           Platform.isAndroid &&
           (_cmdChar == null || _statusChar == null)) {
+        _log('Characteristics missing; clearing GATT cache and rediscovering.');
         await device.clearGattCache();
         _findChars(await device.discoverServices());
       }
@@ -398,10 +456,14 @@ class BleTrafficService {
           'Matching traffic-light BLE characteristics were not found. Flash the v2 firmware.',
         );
       }
+      _log('Traffic-light characteristics found.');
+      stage = 'status subscription';
       _statusSub = _statusChar!.onValueReceived.listen(
         (bytes) => _acceptStatus(bytes, session),
       );
       await _statusChar!.setNotifyValue(true);
+      stage = 'initial status';
+      _log('Reading initial controller status.');
       _acceptStatus(await _statusChar!.read(), session);
       final status = _latestStatus;
       if (status == null || !status.supportsFourWay) {
@@ -409,21 +471,35 @@ class BleTrafficService {
           'Legacy or invalid firmware: install four-way protocol v2 before controlling signals.',
         );
       }
+      stage = 'intersection validation';
+      _log(
+        'Intersection: expected=$_boundIntersectionId; controller=${status.intersectionId}.',
+      );
       if (status.intersectionId != _boundIntersectionId ||
           status.intersectionId == 'UNCONFIGURED') {
         throw StateError(
           'Controller intersection mismatch. Configure the ESP32 with your assigned Firestore intersection ID.',
         );
       }
+      stage = 'STATUS handshake';
+      _log('Authenticating with controller via STATUS.');
       await _sendCommand({'cmd': 'STATUS'});
       if (!isReady) {
         throw StateError('Controller authentication/status handshake failed.');
       }
+      _log('Controller handshake accepted.');
       _knownDevices[_boundIntersectionId!] = device.remoteId.str;
       _connectionController.add(true);
-    } catch (_) {
-      await disconnect();
-      rethrow;
+    } catch (error) {
+      _log('Connection failed during $stage: $error');
+      if (ownsConnection) {
+        try {
+          await disconnect();
+        } catch (cleanupError) {
+          _log('Failed connection cleanup: $cleanupError');
+        }
+      }
+      throw StateError('Bluetooth connection failed during $stage: $error');
     }
   }
 
