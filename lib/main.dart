@@ -17,7 +17,7 @@ import 'pages/driver/driver_dashboard_page.dart';
 import 'pages/admin/admin_dashboard_page.dart';
 import 'pages/hospital/hospital_dashboard_page.dart';
 import 'pages/traffic/pending_verification_screen.dart';
-import 'pages/traffic/traffic_police_dashboard.dart';
+import 'pages/simple_traffic_page.dart';
 import 'models/request_model.dart';
 import 'services/request_service.dart';
 import 'constants/app_config.dart';
@@ -175,9 +175,8 @@ class AuthGate extends StatelessWidget {
                   status: data['verificationStatus'] as String? ?? 'PENDING',
                 );
               }
-              return TrafficPoliceDashboardScreen(
-                uid: snapshot.data!.uid,
-                profile: data,
+              return SimpleTrafficPage(
+                assignedIntersection: data['assignedIntersection']?.toString(),
               );
             }
             if (role == 'driver') {

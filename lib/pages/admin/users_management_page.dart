@@ -12,39 +12,97 @@ class UsersManagementPage extends StatefulWidget {
   State<UsersManagementPage> createState() => _UsersManagementPageState();
 }
 
-class _UsersManagementPageState extends State<UsersManagementPage> {
+class _UsersManagementPageState extends State<UsersManagementPage>
+    with SingleTickerProviderStateMixin {
   final _adminService = AdminService();
+  late final TabController _tabs;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 2, vsync: this);
+    _tabs.addListener(() {
+      if (_tabs.indexIsChanging) return;
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder(
-      stream: _adminService.allUsersStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(child: Text('Error: ${snapshot.error}'));
-        }
-        final docs = snapshot.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return _buildEmpty();
-        }
-        return ListView.separated(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          itemCount: docs.length,
-          separatorBuilder: (context, index) => 12.heightBox,
-          itemBuilder: (context, index) {
-            final doc = docs[index];
-            final data = doc.data() as Map<String, dynamic>;
-            return _UserCard(
-              uid: doc.id,
-              data: data,
-              adminService: _adminService,
-            );
-          },
-        );
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Top navbar — same design as the Hospitals panel.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: TabBar(
+              controller: _tabs,
+              indicator: BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              indicatorSize: TabBarIndicatorSize.tab,
+              labelColor: Colors.white,
+              unselectedLabelColor: AppColors.textGrey,
+              labelStyle: GoogleFonts.poppins(
+                  fontSize: 13, fontWeight: FontWeight.w600),
+              tabs: const [
+                Tab(text: 'All'),
+                Tab(text: 'Traffic Police'),
+              ],
+            ),
+          ),
+        ),
+        Expanded(
+          child: StreamBuilder(
+            stream: _adminService.allUsersStream(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snapshot.hasError) {
+                return Center(child: Text('Error: ${snapshot.error}'));
+              }
+              var docs = snapshot.data?.docs ?? [];
+              if (_tabs.index == 1) {
+                docs = docs
+                    .where((doc) =>
+                        (doc.data() as Map<String, dynamic>)['role'] ==
+                        'traffic_police')
+                    .toList();
+              }
+              if (docs.isEmpty) {
+                return _buildEmpty();
+              }
+              return ListView.separated(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                itemCount: docs.length,
+                separatorBuilder: (context, index) => 12.heightBox,
+                itemBuilder: (context, index) {
+                  final doc = docs[index];
+                  final data = doc.data() as Map<String, dynamic>;
+                  return _UserCard(
+                    uid: doc.id,
+                    data: data,
+                    adminService: _adminService,
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

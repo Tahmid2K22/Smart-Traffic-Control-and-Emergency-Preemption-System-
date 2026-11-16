@@ -56,12 +56,12 @@ class TrafficRtdbState {
 }
 
 class TrafficRtdbService {
-  TrafficRtdbService._();
+  /// Must match INTERSECTION_ID in the ESP32 sketch for the intersection.
+  static const String defaultIntersectionId = 'khulna_royal_mor';
 
-  static final TrafficRtdbService instance = TrafficRtdbService._();
+  TrafficRtdbService({this.intersectionId = defaultIntersectionId});
 
-  /// Must match INTERSECTION_ID in the ESP32 sketch.
-  static const String intersectionId = 'khulna_royal_mor';
+  final String intersectionId;
 
   DatabaseReference get _ref =>
       FirebaseDatabase.instance.ref('traffic/$intersectionId');
@@ -85,10 +85,17 @@ class TrafficRtdbService {
         'id': ServerValue.timestamp,
       });
 
-  Future<void> allRed() => _send({'action': 'allred', 'id': ServerValue.timestamp});
+  /// Police preemption: force one direction to a specific colour
+  /// ('green', 'yellow' or 'red'). Safety rules live in the firmware.
+  Future<void> setColor(String direction, String color) => _send({
+        'action': 'set',
+        'direction': direction,
+        'color': color,
+        'id': ServerValue.timestamp,
+      });
 
   /// Starts the auto cycle with the given phase durations in seconds.
-  /// Ranges enforced by the firmware: green 5-300, yellow 3-60, all-red 2-60.
+  /// Any positive value is accepted (no upper limit).
   Future<void> auto({int greenSec = 30, int yellowSec = 3, int allRedSec = 2}) =>
       _send({
         'action': 'auto',

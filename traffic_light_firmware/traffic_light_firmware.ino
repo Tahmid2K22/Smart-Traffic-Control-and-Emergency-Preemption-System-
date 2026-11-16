@@ -18,22 +18,25 @@
  *
  * Data model (Realtime Database):
  *   traffic/<INTERSECTION_ID>/command = {
- *     "action": "green" | "allred" | "auto",
- *     "direction": "north|east|south|west",   // green only
+ *     "action": "auto" | "manual" | "green" | "allred" | "set",
+ *     "direction": "north|east|south|west",   // green + set
+ *     "color": "green|yellow|red",            // set only (police preemption)
  *     "green_sec": 30, "yellow_sec": 3, "all_red_sec": 2,  // auto only
  *     "id": <millisecond timestamp from the app>  // dedup counter
  *   }
  *   traffic/<INTERSECTION_ID>/status  = {
- *     "mode": "auto|manual",
+ *     "mode": "auto",              // always auto now
  *     "phase": "green|yellow|all_red",
  *     "lights": {"north":"red","east":"green","south":"red","west":"red"},
  *     "updated": <unix seconds>,
  *     "seq": <counter>
  *   }
  *
- * Safety rules: boot and reconnect go all-red/manual; at most one direction
- * is ever non-red; direction changes always run yellow -> all-red -> green;
- * commands older than the last processed one are ignored.
+ * Safety rules: boot and reconnect start with an all-red clearance, then the
+ * board always runs the AUTO cycle (N-E-S-W); at most one direction is ever
+ * non-red; direction changes always run yellow -> all-red -> green; police
+ * preemption only overrides one colour temporarily; commands older than the
+ * last processed one are ignored.
  *
  * Bench prototype only. Not certified for real roads or mains wiring.
  */
@@ -47,19 +50,28 @@
 // ── User config ─────────────────────────────────────────────────────────────
 #define WIFI_SSID        "Redmi 12"   // your Wi-Fi name
 #define WIFI_PASSWORD    "1theke80"   // your Wi-Fi password
-#define DB_URL           "https://e-ambulance-system-001-default-rtdb.firebaseio.com"   // no trailing slash
-#define DB_SECRET        ""   // legacy database secret
+#define DB_URL           "https://e-ambulance-system-001-default-rtdb.firebaseio.com"
+#define DB_SECRET        ""          // legacy database secret; empty = open bench rules
 #define INTERSECTION_ID  "khulna_royal_mor"
 
 #define STATUS_INTERVAL_MS  5000
-#define MANUAL_TIMEOUT_MS   120000  // idle manual control returns to all-red
 
-// North, East, South, West: {red, yellow, green} — active-HIGH
+// ── Traffic light GPIO wiring ───────────────────────────────────────────────
+// 12 LEDs total (4 directions x red/yellow/green), active-HIGH (through a
+// current-limiting resistor, e.g. 220R, to each LED's anode).
+//
+//   Direction | Red  | Yellow | Green
+//   ----------+------+--------+------
+//   North     | GPIO25 | GPIO26 | GPIO27
+//   East      | GPIO14 | GPIO32 | GPIO33
+//   South     | GPIO18 | GPIO19 | GPIO21
+//   West      | GPIO22 | GPIO23 | GPIO13
+//
 static const uint8_t LED_PINS[4][3] = {
-  {25, 26, 27},   // north
-  {14, 32, 33},   // east
-  {18, 19, 21},   // south
-  {22, 23, 13},   // west
+  {25, 26, 27},   // north  {red, yellow, green}
+  {14, 32, 33},   // east   {red, yellow, green}
+  {18, 19, 21},   // south  {red, yellow, green}
+  {22, 23, 13},   // west   {red, yellow, green}
 };
 static const char* const DIR_NAMES[4]   = {"north", "east", "south", "west"};
 static const char* const LIGHT_NAMES[3] = {"red", "yellow", "green"};
@@ -78,13 +90,15 @@ static void makePath(const char* node, char* out, size_t cap) {
 }
 
 // ── Signal state ────────────────────────────────────────────────────────────
+// The board is ALWAYS in AUTO mode: it boots straight into the cycle (starting
+// from an all-red clearance) and keeps cycling even with no app connected.
+// Police commands only preempt colours temporarily; the cycle resumes after.
 enum Phase : uint8_t { PH_ALL_RED, PH_GREEN, PH_YELLOW };
 
-static bool     autoMode = false;
 static Phase    phase    = PH_ALL_RED;
 static int8_t   active   = -1;   // direction that is green/yellow, -1 none
 static int8_t   pending  = -1;   // direction that becomes green next, -1 idle
-static uint32_t phaseStart = 0, lastControlMs = 0, lastStatusMs = 0;
+static uint32_t phaseStart = 0, lastStatusMs = 0;
 static uint32_t greenMs = 30000, yellowMs = 3000, allRedMs = 2000;
 static uint32_t seq = 0;
 static long long lastCmdId = 0;
@@ -140,36 +154,74 @@ static void executeAction(const JsonObject& cmd) {
   if (action[0] == 0 || id == 0) return;
   if (id <= lastCmdId) return;  // stale or replayed command
   lastCmdId = id;
-  lastControlMs = millis();
   Serial.printf("[traffic] command: %s %s (id=%lld)\n", action, dir, id);
 
-  if (!strcmp(action, "allred")) {
-    autoMode = false;
+  if (!strcmp(action, "allred") || !strcmp(action, "manual")) {
+    // Force all-red now, then the cycle resumes from the next direction.
     goAllRedIdle();
+    pending = (active >= 0) ? (active + 1) % 4 : 0;
     return;
   }
   if (!strcmp(action, "auto")) {
+    // (Re)start the AUTO cycle from an all-red clearance. Durations have no
+    // upper limit; non-positive or missing values keep the current/default.
     if (busy()) return;        // never interrupt a change mid-way
-    // Optional timing; out-of-range values reject the whole command.
     long g = cmd["green_sec"] | 30L;
     long y = cmd["yellow_sec"] | 3L;
     long a = cmd["all_red_sec"] | 2L;
-    if (g < 5 || g > 300 || y < 3 || y > 60 || a < 2 || a > 60) return;
+    if (g < 1) g = 30;
+    if (y < 1) y = 3;
+    if (a < 1) a = 2;
     greenMs = g * 1000UL;
     yellowMs = y * 1000UL;
     allRedMs = a * 1000UL;
-    autoMode = true;
-    startTransfer(0);          // fresh all-red, then north, E, S, W, ...
+    startTransfer(0);          // all-red clearance, then north, E, S, W, ...
     return;
   }
   if (!strcmp(action, "green")) {
+    // Preempt: give one direction green (safe transfer), cycle resumes after.
     if (busy()) return;
     int d = dirIndex(dir);
     if (d < 0) return;
-    autoMode = false;
     if (phase == PH_GREEN && d == active) return;  // already green: no-op
     startTransfer(d);
     return;
+  }
+  if (!strcmp(action, "set")) {
+    // Police preemption: force one direction to a specific colour.
+    // Safety unchanged: at most one direction is ever non-red. The AUTO
+    // cycle always resumes after the preempted state ends.
+    int d = dirIndex(dir);
+    if (d < 0) return;
+    const char* color = cmd["color"] | "";
+    if (!strcmp(color, "green")) {
+      if (busy()) return;
+      if (phase == PH_GREEN && d == active) return;  // already green
+      startTransfer(d);            // yellow/all-red clearance, then green
+      return;
+    }
+    if (!strcmp(color, "yellow")) {
+      // Only the active direction may be switched to yellow while it is
+      // green; from all-red idle any direction can start a yellow.
+      if (busy()) return;
+      if (phase == PH_GREEN && d != active) return;
+      active = d;
+      phase = PH_YELLOW;
+      phaseStart = millis();
+      pending = -1;                // yellow ends into all-red, then resume
+      applyOutputs();
+      statusDirty = true;
+      return;
+    }
+    if (!strcmp(color, "red")) {
+      // A red direction is already red (no-op); taking the active one
+      // down ends into all-red clearance, then the cycle resumes.
+      if (active == d) {
+        goAllRedIdle();
+        pending = (d + 1) % 4;
+      }
+      return;
+    }
   }
 }
 
@@ -180,9 +232,7 @@ static void publishStatus() {
   char path[160];
   makePath("status", path, sizeof(path));
 
-  String body = "{\"mode\":\"";
-  body += autoMode ? "auto" : "manual";
-  body += "\",\"phase\":\"";
+  String body = "{\"mode\":\"auto\",\"phase\":\"";
   body += phase == PH_GREEN ? "green" : (phase == PH_YELLOW ? "yellow" : "all_red");
   body += "\",\"lights\":{";
   for (int d = 0; d < 4; ++d) {
@@ -344,28 +394,36 @@ void setup() {
   // otherwise the SNTP UDP socket races the lwIP stack and can assert-crash.
   configTime(6 * 3600, 0, "pool.ntp.org", "time.nist.gov");  // GMT+6 Dhaka
 
-  applyOutputs();  // boot: all red, manual
+  applyOutputs();  // boot: all red
   publishStatus();
+
+  // No command needed: the board ALWAYS starts in AUTO mode — all-red
+  // clearance first, then the north/east/south/west cycle. A newer stored
+  // command (e.g. custom durations) still applies when the stream connects.
+  startTransfer(0);
 }
 
 void loop() {
   uint32_t now = millis();
 
-  // Wi-Fi upkeep.
+  // Wi-Fi upkeep — non-blocking. The signal state machine below ALWAYS runs,
+  // so AUTO keeps cycling even while Wi-Fi is down; status upload and the
+  // command stream simply pause and resume when the network comes back.
   if (WiFi.status() != WL_CONNECTED) {
     streamUp = false;
-    WiFi.reconnect();
-    delay(1000);
-    return;
+    static uint32_t lastReconnectMs = 0;
+    if (now - lastReconnectMs >= 5000) {
+      lastReconnectMs = now;
+      WiFi.reconnect();
+    }
+  } else {
+    streamLoop();
+    // Re-capture: a command processed inside streamLoop() may set phaseStart
+    // to a value NEWER than the `now` captured at the top of this pass. With
+    // unsigned arithmetic, `now - phaseStart` would wrap to ~4.29e9 and
+    // falsely trigger a phase transition on the very same pass.
+    now = millis();
   }
-
-  streamLoop();
-
-  // Re-capture: executeAction() (inside streamLoop) sets lastControlMs and
-  // phaseStart to values NEWER than the `now` captured at the top of this
-  // pass. With unsigned arithmetic, `now - those` would wrap to ~4.29e9 and
-  // falsely trigger the timeout / phase transitions on the very same pass.
-  now = millis();
 
   // Phase timing: green -> yellow -> all-red -> (next green in auto).
   if (phase == PH_GREEN && now - phaseStart >= greenMs) {
@@ -376,7 +434,7 @@ void loop() {
   } else if (phase == PH_YELLOW && now - phaseStart >= yellowMs) {
     phase = PH_ALL_RED;
     phaseStart = now;
-    if (autoMode && active >= 0) pending = (active + 1) % 4;  // N E S W cycle
+    if (active >= 0) pending = (active + 1) % 4;  // N E S W cycle resumes
     applyOutputs();
     statusDirty = true;
   } else if (phase == PH_ALL_RED && pending >= 0 && now - phaseStart >= allRedMs) {
@@ -386,12 +444,6 @@ void loop() {
     phaseStart = now;
     applyOutputs();
     statusDirty = true;
-  }
-
-  // Manual control left unattended: back to all-red.
-  if (!autoMode && now - lastControlMs > MANUAL_TIMEOUT_MS &&
-      (phase != PH_ALL_RED || pending >= 0)) {
-    goAllRedIdle();
   }
 
   // Upload status only when it changed, or once per heartbeat interval.

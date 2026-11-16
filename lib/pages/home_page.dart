@@ -484,14 +484,14 @@ class _HomePageState extends State<HomePage> {
               Container(
                 width: 80,
                 height: 80,
-                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Image.asset(
-                  'assets/e ambulance logo.png',
-                  fit: BoxFit.contain,
+                child: const Icon(
+                  Icons.add_rounded,
+                  size: 48,
+                  color: AppColors.primary,
                 ),
               ),
             ],

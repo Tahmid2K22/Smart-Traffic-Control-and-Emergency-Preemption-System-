@@ -4,7 +4,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:velocity_x/velocity_x.dart';
 import '../../constants/colors.dart';
 import '../../services/admin_service.dart';
-import '../../services/hospital_service.dart';
 
 class HospitalsManagementPage extends StatefulWidget {
   const HospitalsManagementPage({super.key});
@@ -18,8 +17,6 @@ class _HospitalsManagementPageState extends State<HospitalsManagementPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   final _adminService = AdminService();
-  final _hospitalService = HospitalService();
-  bool _seeding = false;
 
   @override
   void initState() {
@@ -33,36 +30,12 @@ class _HospitalsManagementPageState extends State<HospitalsManagementPage>
     super.dispose();
   }
 
-  Future<void> _seed() async {
-    setState(() => _seeding = true);
-    try {
-      await _hospitalService.seedKhulnaHospitals();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Khulna hospitals seeded successfully!'),
-            backgroundColor: AppColors.success,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Seed failed: $e'),
-              backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _seeding = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Tab bar + Seed button
+        // Tab bar
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
           child: Row(
@@ -88,34 +61,6 @@ class _HospitalsManagementPageState extends State<HospitalsManagementPage>
                       Tab(text: 'Pending'),
                       Tab(text: 'All'),
                     ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Seed Khulna data button
-              Tooltip(
-                message: 'Seed real Khulna hospitals',
-                child: ElevatedButton.icon(
-                  onPressed: _seeding ? null : _seed,
-                  icon: _seeding
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white))
-                      : const Icon(Icons.download_rounded, size: 16),
-                  label: Text(
-                    'Seed',
-                    style: GoogleFonts.poppins(
-                        fontSize: 12, fontWeight: FontWeight.w600),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF1565C0),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
               ),

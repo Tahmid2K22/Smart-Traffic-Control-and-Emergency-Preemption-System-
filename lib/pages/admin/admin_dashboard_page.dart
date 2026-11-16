@@ -8,13 +8,11 @@ import 'package:google_nav_bar/google_nav_bar.dart';
 
 import '../../constants/colors.dart';
 import '../../services/admin_service.dart';
-import '../traffic_light_control_page.dart';
 import 'drivers_management_page.dart';
 import 'users_management_page.dart';
 import 'hospitals_management_page.dart';
 import 'intersections_management_page.dart';
 import 'admin_activity_log_page.dart';
-import 'admin_verification_dashboard.dart';
 
 class AdminDashboardPage extends StatefulWidget {
   const AdminDashboardPage({super.key});
@@ -151,20 +149,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                 ),
               ),
               // logout
-              IconButton(
-                tooltip: 'Traffic police verification',
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AdminVerificationDashboard(),
-                  ),
-                ),
-                icon: const Icon(
-                  Icons.verified_user_rounded,
-                  color: Colors.white,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 4),
               GestureDetector(
                 onTap: _showLogoutDialog,
                 child: Container(
@@ -327,78 +311,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                 MaterialPageRoute<void>(
                   builder: (_) => const IntersectionsManagementPage(),
                 ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // -- Traffic Light quick-access card -----------------------------
-          GestureDetector(
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const TrafficLightControlPage(),
-              ),
-            ),
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF1565C0), Color(0xFF1976D2)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Color(0x591565C0),
-                    blurRadius: 12,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Color(0x33FFFFFF),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.traffic_rounded,
-                      color: Colors.white,
-                      size: 26,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Traffic Light Control',
-                          style: GoogleFonts.poppins(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15,
-                            color: Colors.white,
-                          ),
-                        ),
-                        Text(
-                          'Traffic Police Only • Passcode Protected',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: const Color(0xCCFFFFFF),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(
-                    Icons.arrow_forward_ios_rounded,
-                    color: Colors.white,
-                    size: 16,
-                  ),
-                ],
               ),
             ),
           ),

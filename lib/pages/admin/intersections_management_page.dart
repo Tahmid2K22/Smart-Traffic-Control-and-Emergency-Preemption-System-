@@ -332,11 +332,6 @@ class _IntersectionDiagram extends StatelessWidget {
                   'UNKNOWN',
                   style: TextStyle(color: Colors.grey, fontSize: 11),
                 ),
-                if (lights[direction]!.controllerId?.trim().isNotEmpty != true)
-                  const Text(
-                    'Unconfigured',
-                    style: TextStyle(color: Colors.grey, fontSize: 11),
-                  ),
               ],
             ),
           ),

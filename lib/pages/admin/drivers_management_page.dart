@@ -12,13 +12,31 @@ class DriversManagementPage extends StatefulWidget {
   State<DriversManagementPage> createState() => _DriversManagementPageState();
 }
 
-class _DriversManagementPageState extends State<DriversManagementPage> {
+class _DriversManagementPageState extends State<DriversManagementPage>
+    with SingleTickerProviderStateMixin {
   final _adminService = AdminService();
+  late final TabController _tabs;
 
   // 0 = All, 1 = Pending, 2 = Verified, 3 = Rejected
-  int _filterIndex = 0;
-
   static const _filters = ['All', 'Pending', 'Verified', 'Rejected'];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: _filters.length, vsync: this);
+    _tabs.addListener(() {
+      if (_tabs.indexIsChanging) return;
+      setState(() => _filterIndex = _tabs.index);
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  int _filterIndex = 0;
 
   Stream<QuerySnapshot> _buildStream() {
     final col = FirebaseFirestore.instance
@@ -43,8 +61,32 @@ class _DriversManagementPageState extends State<DriversManagementPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Filter chips
-        _buildFilterRow(),
+        // Top navbar — same design as the Hospitals panel.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+          child: Container(
+            decoration: BoxDecoration(
+              color: AppColors.background,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: TabBar(
+              controller: _tabs,
+              isScrollable: true,
+              indicator: BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              indicatorSize: TabBarIndicatorSize.tab,
+              labelColor: Colors.white,
+              unselectedLabelColor: AppColors.textGrey,
+              labelStyle: GoogleFonts.poppins(
+                  fontSize: 13, fontWeight: FontWeight.w600),
+              tabs: [
+                for (final filter in _filters) Tab(text: filter),
+              ],
+            ),
+          ),
+        ),
         // Driver list
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
@@ -78,48 +120,6 @@ class _DriversManagementPageState extends State<DriversManagementPage> {
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildFilterRow() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 20, 0, 10),
-      child: SizedBox(
-        height: 36,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          itemCount: _filters.length,
-          separatorBuilder: (_, _) => 10.widthBox,
-          itemBuilder: (context, index) {
-            final isSelected = _filterIndex == index;
-            return GestureDetector(
-              onTap: () => setState(() => _filterIndex = index),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primaryLight : Colors.transparent,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isSelected ? AppColors.primary : AppColors.cardBorder,
-                  ),
-                ),
-                child: Text(
-                  _filters[index],
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: isSelected ? AppColors.primary : AppColors.textGrey,
-                  ),
-                ),
-              ),
-            );
-          },
-        ),
-      ),
     );
   }
 
