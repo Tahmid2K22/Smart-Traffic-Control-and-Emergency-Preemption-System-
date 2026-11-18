@@ -9,8 +9,8 @@ import 'map_search_service.dart';
 
 class AuthService {
   AuthService({FirebaseAuth? auth, FirebaseFirestore? firestore})
-      : _auth = auth ?? FirebaseAuth.instance,
-        _firestore = firestore ?? FirebaseFirestore.instance;
+    : _auth = auth ?? FirebaseAuth.instance,
+      _firestore = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
@@ -43,7 +43,9 @@ class AuthService {
             assignedIntersection == null ||
             assignedIntersection.trim().isEmpty ||
             badgeImage == null)) {
-      throw ArgumentError('All traffic police registration fields are required.');
+      throw ArgumentError(
+        'All traffic police registration fields are required.',
+      );
     }
 
     final credential = await _auth.createUserWithEmailAndPassword(
@@ -58,6 +60,7 @@ class AuthService {
         message: 'The account could not be created.',
       );
     }
+    await user.updateDisplayName(name.trim());
 
     // ── Write to Firebase Firestore ──────────────────────────
     final profile = <String, dynamic>{
@@ -144,7 +147,8 @@ class AuthService {
         firebaseUid: firebaseUid,
         name: firestoreData['name'] as String? ?? '',
         phone: firestoreData['phone'] as String? ?? '',
-        vehicleType: firestoreData['vehicleType'] as String? ?? 'Basic Ambulance',
+        vehicleType:
+            firestoreData['vehicleType'] as String? ?? 'Basic Ambulance',
         vehicleNumber: firestoreData['vehicleNumber'] as String? ?? '',
         isApproved: firestoreData['isApproved'] == true,
       );

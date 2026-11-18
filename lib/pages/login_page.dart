@@ -40,7 +40,13 @@ class _LoginPageState extends State<LoginPage> {
           if (doc.exists) {
             final data = doc.data()!;
             final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('userName', data['name'] ?? '');
+            final profileName =
+                data['name']?.toString().trim().isNotEmpty == true
+                ? data['name'].toString().trim()
+                : data['fullName']?.toString().trim() ??
+                      userCredential.user!.displayName ??
+                      '';
+            await prefs.setString('userName', profileName);
             await prefs.setString(
               'userEmail',
               data['email'] ?? userCredential.user!.email ?? '',

@@ -38,3 +38,40 @@ create policy "Allow read messages"
 create policy "Allow insert messages"
   on messages for insert
   with check (true);
+
+-- 6. Server-side fallback for the 10-minute pending-trip timeout.
+-- The app also performs this sweep, but this schedule ensures trips expire
+-- even when no client is currently viewing the request.
+create extension if not exists pg_cron;
+
+create or replace function public.expire_pending_requests()
+returns integer
+language sql
+security definer
+set search_path = public
+as $$
+  with expired as (
+    update public.requests
+    set status = 'cancelled'
+    where status = 'pending'
+      and created_at < now() - interval '10 minutes'
+    returning id
+  )
+  select count(*)::integer from expired;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from cron.job
+    where jobname = 'expire-pending-ambulance-requests'
+  ) then
+    perform cron.schedule(
+      'expire-pending-ambulance-requests',
+      '* * * * *',
+      'select public.expire_pending_requests();'
+    );
+  end;
+end;
+$$;

@@ -1,12 +1,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:geocoding/geocoding.dart';
+
+import '../models/models.dart';
 
 /// Handles hospital registration and approved-hospital queries used by the
 /// booking screen and home page.
 class HospitalService {
   HospitalService({FirebaseFirestore? firestore})
-      : _providedFirestore = firestore;
+    : _providedFirestore = firestore;
 
   final FirebaseFirestore? _providedFirestore;
 
@@ -22,10 +25,11 @@ class HospitalService {
     required String password,
     required String address,
   }) async {
-    final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-      email: email.trim(),
-      password: password,
-    );
+    final credential = await FirebaseAuth.instance
+        .createUserWithEmailAndPassword(
+          email: email.trim(),
+          password: password,
+        );
     final user = credential.user;
     if (user == null) {
       throw FirebaseAuthException(
@@ -46,11 +50,26 @@ class HospitalService {
       'createdAt': FieldValue.serverTimestamp(),
     });
 
+    double lat = 0;
+    double lon = 0;
+    try {
+      final locations = await Geocoding().locationFromAddress(
+        '$address, Bangladesh',
+      );
+      if (locations.isNotEmpty) {
+        lat = locations.first.latitude;
+        lon = locations.first.longitude;
+      }
+    } catch (_) {}
+
     await _firestore.collection('hospitals').add({
       'name': name.trim(),
       'email': email.trim(),
       'phone': phone.trim(),
       'address': address.trim(),
+      'lat': lat,
+      'lon': lon,
+      if (lat != 0 || lon != 0) 'location': GeoPoint(lat, lon),
       'services': <String>[],
       'diagnoses': <String>[],
       'beds': 0,
@@ -99,8 +118,18 @@ class HospitalService {
         .snapshots();
   }
 
+  Future<List<HospitalModel>> approvedHospitalsOnce() async {
+    if (Firebase.apps.isEmpty) return const [];
+    final snapshot = await _firestore
+        .collection('hospitals')
+        .where('isApproved', isEqualTo: true)
+        .get();
+    return snapshot.docs.map(HospitalModel.fromDoc).toList();
+  }
+
   Future<DocumentSnapshot<Map<String, dynamic>>> getHospitalForUser(
-      String uid) async {
+    String uid,
+  ) async {
     final result = await _firestore
         .collection('hospitals')
         .where('registeredBy', isEqualTo: uid)
@@ -149,8 +178,20 @@ class HospitalService {
         'lat': 23.7257,
         'lon': 90.3976,
         'beds': 2600,
-        'services': ['Emergency 24/7', 'ICU', 'Burn Unit', 'Surgery', 'Blood Bank'],
-        'diagnoses': ['Cardiology', 'Neurology', 'Orthopedics', 'General Medicine', 'Trauma'],
+        'services': [
+          'Emergency 24/7',
+          'ICU',
+          'Burn Unit',
+          'Surgery',
+          'Blood Bank',
+        ],
+        'diagnoses': [
+          'Cardiology',
+          'Neurology',
+          'Orthopedics',
+          'General Medicine',
+          'Trauma',
+        ],
         'isApproved': true,
         'registeredBy': 'system_seed',
         'createdAt': FieldValue.serverTimestamp(),
@@ -162,7 +203,13 @@ class HospitalService {
         'lat': 23.7388,
         'lon': 90.3957,
         'beds': 1900,
-        'services': ['Emergency 24/7', 'ICU', 'CCU', 'Transplant', 'Diagnostics'],
+        'services': [
+          'Emergency 24/7',
+          'ICU',
+          'CCU',
+          'Transplant',
+          'Diagnostics',
+        ],
         'diagnoses': ['Cardiology', 'Nephrology', 'Oncology', 'Neurology'],
         'isApproved': true,
         'registeredBy': 'system_seed',
@@ -175,7 +222,13 @@ class HospitalService {
         'lat': 23.7533,
         'lon': 90.3816,
         'beds': 400,
-        'services': ['Emergency 24/7', 'ICU', 'NICU', 'Cardiac Center', 'Ambulance'],
+        'services': [
+          'Emergency 24/7',
+          'ICU',
+          'NICU',
+          'Cardiac Center',
+          'Ambulance',
+        ],
         'diagnoses': ['Cardiology', 'Critical Care', 'Surgery', 'Pediatrics'],
         'isApproved': true,
         'registeredBy': 'system_seed',
@@ -188,8 +241,19 @@ class HospitalService {
         'lat': 23.7997,
         'lon': 90.4194,
         'beds': 500,
-        'services': ['Emergency 24/7', 'Trauma Center', 'ICU', 'Helipad', 'Cardiac Center'],
-        'diagnoses': ['Cardiology', 'Neurology', 'Oncology', 'Gastroenterology'],
+        'services': [
+          'Emergency 24/7',
+          'Trauma Center',
+          'ICU',
+          'Helipad',
+          'Cardiac Center',
+        ],
+        'diagnoses': [
+          'Cardiology',
+          'Neurology',
+          'Oncology',
+          'Gastroenterology',
+        ],
         'isApproved': true,
         'registeredBy': 'system_seed',
         'createdAt': FieldValue.serverTimestamp(),
@@ -201,7 +265,13 @@ class HospitalService {
         'lat': 23.8105,
         'lon': 90.4312,
         'beds': 425,
-        'services': ['Emergency 24/7', 'ICU', 'Surgery', 'Pediatrics', 'Ambulance'],
+        'services': [
+          'Emergency 24/7',
+          'ICU',
+          'Surgery',
+          'Pediatrics',
+          'Ambulance',
+        ],
         'diagnoses': ['Cardiology', 'Neurology', 'Orthopedics', 'Pediatrics'],
         'isApproved': true,
         'registeredBy': 'system_seed',
@@ -228,7 +298,12 @@ class HospitalService {
         'lon': 90.3712,
         'beds': 875,
         'services': ['Emergency 24/7', 'ICU', 'Burn Unit', 'Blood Bank'],
-        'diagnoses': ['General Medicine', 'Cardiology', 'Pediatrics', 'Orthopedics'],
+        'diagnoses': [
+          'General Medicine',
+          'Cardiology',
+          'Pediatrics',
+          'Orthopedics',
+        ],
         'isApproved': true,
         'registeredBy': 'system_seed',
         'createdAt': FieldValue.serverTimestamp(),
@@ -255,7 +330,12 @@ class HospitalService {
         'lon': 89.5403,
         'beds': 500,
         'services': ['Emergency', 'ICU', 'Surgery', 'OPD', 'Cardiology'],
-        'diagnoses': ['General Medicine', 'Cardiology', 'Neurology', 'Oncology'],
+        'diagnoses': [
+          'General Medicine',
+          'Cardiology',
+          'Neurology',
+          'Oncology',
+        ],
         'isApproved': true,
         'registeredBy': 'system_seed',
         'createdAt': FieldValue.serverTimestamp(),
@@ -268,7 +348,12 @@ class HospitalService {
         'lon': 89.5536,
         'beds': 300,
         'services': ['Emergency', 'ICU', 'OPD', 'Burn Unit'],
-        'diagnoses': ['General Medicine', 'Orthopedics', 'Gynecology', 'Pediatrics'],
+        'diagnoses': [
+          'General Medicine',
+          'Orthopedics',
+          'Gynecology',
+          'Pediatrics',
+        ],
         'isApproved': true,
         'registeredBy': 'system_seed',
         'createdAt': FieldValue.serverTimestamp(),

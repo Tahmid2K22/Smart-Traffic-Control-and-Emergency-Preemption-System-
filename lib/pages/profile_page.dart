@@ -39,17 +39,60 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _name = prefs.getString('userName') ?? 'No Name';
-      _email = prefs.getString('userEmail') ?? 'No Email';
-      _phone = prefs.getString('userPhone') ?? 'No Phone';
-      _city = prefs.getString('userCity');
+    final user = FirebaseAuth.instance.currentUser;
 
-      // Update controllers as well
+    var name = prefs.getString('userName')?.trim() ?? '';
+    var email =
+        prefs.getString('userEmail')?.trim() ?? user?.email?.trim() ?? '';
+    var phone = prefs.getString('userPhone')?.trim() ?? '';
+    var city = prefs.getString('userCity')?.trim();
+
+    if (user != null) {
+      try {
+        final snapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        final data = snapshot.data();
+        if (data != null) {
+          name = data['name']?.toString().trim().isNotEmpty == true
+              ? data['name'].toString().trim()
+              : data['fullName']?.toString().trim().isNotEmpty == true
+              ? data['fullName'].toString().trim()
+              : name.isNotEmpty
+              ? name
+              : user.displayName?.trim() ?? '';
+          email = data['email']?.toString().trim().isNotEmpty == true
+              ? data['email'].toString().trim()
+              : user.email?.trim() ?? email;
+          phone = data['phone']?.toString().trim().isNotEmpty == true
+              ? data['phone'].toString().trim()
+              : phone;
+          final firestoreCity = data['city']?.toString().trim() ?? '';
+          if (firestoreCity.isNotEmpty) city = firestoreCity;
+        } else {
+          name = name.isNotEmpty ? name : user.displayName?.trim() ?? '';
+          email = email.isNotEmpty ? email : user.email?.trim() ?? '';
+        }
+      } on FirebaseException catch (error) {
+        debugPrint('Failed to fetch profile: ${error.message}');
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _name = name.isNotEmpty ? name : 'No Name';
+      _email = email.isNotEmpty ? email : 'No Email';
+      _phone = phone.isNotEmpty ? phone : 'No Phone';
+      _city = city?.isNotEmpty == true ? city : null;
       _nameCtrl.text = _name;
       _emailCtrl.text = _email;
       _phoneCtrl.text = _phone;
     });
+
+    await prefs.setString('userName', _name);
+    await prefs.setString('userEmail', _email);
+    await prefs.setString('userPhone', _phone);
   }
 
   @override
@@ -567,14 +610,30 @@ class _ProfilePageState extends State<ProfilePage> {
                             await FirebaseFirestore.instance
                                 .collection('users')
                                 .doc(user.uid)
-                                .update({
+                                .set({
                                   'name': _name,
+                                  'fullName': _name,
                                   'email': _email,
                                   'phone': _phone,
                                   'city': _city,
-                                });
+                                  'uid': user.uid,
+                                }, SetOptions(merge: true));
+                            await user.updateDisplayName(_name);
                           } catch (e) {
-                            debugPrint('Failed to update Firestore: $e');
+                            debugPrint(
+                              'Failed to update Firestore profile: $e',
+                            );
+                            if (mounted) {
+                              messenger.showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Could not save profile to the database.',
+                                  ),
+                                  backgroundColor: AppColors.warning,
+                                ),
+                              );
+                              return;
+                            }
                           }
                         }
 

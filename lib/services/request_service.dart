@@ -1,4 +1,4 @@
-﻿import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'dart:math' as math;
@@ -138,6 +138,7 @@ class RequestService {
   /// Fetches all requests for the current user (for Activity page).
   static Future<List<AmbulanceRequest>> getUserRequests() async {
     if (!supabaseReady) return [];
+    await expireStalePendingRequests();
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return [];
     final rows = await sb
@@ -158,28 +159,108 @@ class RequestService {
     if (!supabaseReady) {
       throw StateError('Supabase is not initialised.');
     }
+
+    // A driver cancelling an accepted trip is not a final cancellation.
+    // Put the trip back into the pending pool and restart its 10-minute search.
+    if (driverId != null) {
+      final redispatched = await sb
+          .from(SupabaseTables.requests)
+          .update({
+            'status': RequestStatus.pending.toDbString(),
+            'driver_id': null,
+            'accepted_at': null,
+            'completed_at': null,
+            'created_at': DateTime.now().toIso8601String(),
+          })
+          .eq('id', requestId)
+          .eq('driver_id', driverId)
+          .inFilter('status', [
+            RequestStatus.accepted.toDbString(),
+            RequestStatus.enRoute.toDbString(),
+            RequestStatus.arrived.toDbString(),
+          ])
+          .select('id');
+      if (redispatched.isEmpty) {
+        throw StateError('This trip is no longer available for you to cancel.');
+      }
+      await sb
+          .from(SupabaseTables.drivers)
+          .update({'current_request_id': null})
+          .eq('id', driverId);
+      return;
+    }
+
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      throw StateError('Log in to your account before cancelling a trip.');
+    }
+    final cancellableStatuses = [
+      RequestStatus.pending.toDbString(),
+      RequestStatus.accepted.toDbString(),
+      RequestStatus.enRoute.toDbString(),
+      RequestStatus.arrived.toDbString(),
+    ];
     final cancelled = await sb
         .from(SupabaseTables.requests)
         .update({'status': RequestStatus.cancelled.toDbString()})
         .eq('id', requestId)
-        .inFilter('status', [
-          RequestStatus.pending.toDbString(),
-          RequestStatus.accepted.toDbString(),
-          RequestStatus.enRoute.toDbString(),
-          RequestStatus.arrived.toDbString(),
-        ])
+        .eq('user_firebase_uid', uid)
+        .inFilter('status', cancellableStatuses)
         .select('id');
     if (cancelled.isEmpty) {
-      throw StateError('This trip is no longer available to cancel.');
+      final current = await sb
+          .from(SupabaseTables.requests)
+          .select('status')
+          .eq('id', requestId)
+          .maybeSingle();
+      final currentStatus = current?['status'] as String?;
+      if (currentStatus != RequestStatus.cancelled.toDbString()) {
+        throw StateError(
+          currentStatus == null
+              ? 'This trip could not be found.'
+              : 'This trip is no longer available to cancel (status: $currentStatus).',
+        );
+      }
     }
-    final driverQuery = sb
-        .from(SupabaseTables.drivers)
-        .update({'current_request_id': null});
+    final driverQuery = sb.from(SupabaseTables.drivers).update({
+      'current_request_id': null,
+    });
     if (driverId == null) {
       await driverQuery.eq('current_request_id', requestId);
     } else {
       await driverQuery.eq('id', driverId);
     }
+  }
+
+  /// Cancels a pending request when the driver search window expires.
+  /// Returns false when a driver accepted it before the timeout won the race.
+  static Future<bool> expirePendingRequest(String requestId) async {
+    if (!supabaseReady) {
+      throw StateError('Supabase is not initialised.');
+    }
+    final expired = await sb
+        .from(SupabaseTables.requests)
+        .update({'status': RequestStatus.cancelled.toDbString()})
+        .eq('id', requestId)
+        .eq('status', RequestStatus.pending.toDbString())
+        .select('id');
+    return expired.isNotEmpty;
+  }
+
+  /// Cancels every pending request whose search window is 10 minutes old.
+  /// This sweep also works after the app restarts or comes back online.
+  static Future<int> expireStalePendingRequests() async {
+    if (!supabaseReady) return 0;
+    final cutoff = DateTime.now()
+        .subtract(const Duration(minutes: 10))
+        .toIso8601String();
+    final expired = await sb
+        .from(SupabaseTables.requests)
+        .update({'status': RequestStatus.cancelled.toDbString()})
+        .eq('status', RequestStatus.pending.toDbString())
+        .lt('created_at', cutoff)
+        .select('id');
+    return (expired as List).length;
   }
 
   // ── Driver accept / reject / complete ───────────────────────────────────────
@@ -226,7 +307,9 @@ class RequestService {
         ])
         .select('id');
     if (updated.isEmpty) {
-      throw StateError('The trip cannot be marked arrived in its current state.');
+      throw StateError(
+        'The trip cannot be marked arrived in its current state.',
+      );
     }
   }
 
@@ -266,6 +349,7 @@ class RequestService {
   /// Stream of ALL pending requests — driver listens to this to get incoming jobs.
   static Stream<List<AmbulanceRequest>> streamPendingRequests() {
     if (!supabaseReady) return const Stream.empty();
+    expireStalePendingRequests();
     return sb
         .from(SupabaseTables.requests)
         .stream(primaryKey: ['id'])
@@ -378,11 +462,19 @@ class RequestService {
         .from(SupabaseTables.requests)
         .stream(primaryKey: ['id'])
         .eq('driver_id', driverId)
-        .inFilter('status', ['accepted', 'en_route', 'arrived'])
         .order('accepted_at', ascending: false)
-        .map(
-          (rows) => rows.isEmpty ? null : AmbulanceRequest.fromMap(rows.first),
-        );
+        .map((rows) {
+          final activeRows = rows.where(
+            (row) => [
+              RequestStatus.accepted.toDbString(),
+              RequestStatus.enRoute.toDbString(),
+              RequestStatus.arrived.toDbString(),
+            ].contains(row['status']),
+          );
+          return activeRows.isEmpty
+              ? null
+              : AmbulanceRequest.fromMap(activeRows.first);
+        });
   }
 
   // ── Chat / messaging ────────────────────────────────────────────────────────
