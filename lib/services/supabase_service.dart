@@ -18,7 +18,8 @@ SupabaseClient get sb => Supabase.instance.client;
 /// Table name constants — avoids hard-coded strings throughout the codebase.
 class SupabaseTables {
   SupabaseTables._();
-  static const String drivers  = 'drivers';
-  static const String requests = 'requests';
-  static const String messages = 'messages';
+  static const String drivers     = 'drivers';
+  static const String requests    = 'requests';
+  static const String messages    = 'messages';
+  static const String nidRecords  = 'nid_records';
 }

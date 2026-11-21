@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import '../constants/colors.dart';
 import '../constants/districts.dart';
 import '../services/auth_service.dart';
+import '../services/nid_service.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
@@ -18,6 +19,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
+  final _nidController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
@@ -29,6 +31,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _authService = AuthService();
 
   String _role = 'patient';
+  DateTime? _birthDate;
   String? _selectedCity;
   String? _selectedVehicleType;
   XFile? _licenseImage;
@@ -36,7 +39,6 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _isLoading = false;
 
   bool get _isDriver => _role == 'driver';
-  bool get _isTrafficPolice => _role == 'traffic_police';
 
   Future<void> _register() async {
     FocusScope.of(context).unfocus();
@@ -45,13 +47,28 @@ class _RegisterPageState extends State<RegisterPage> {
       setState(() => _licenseImageError = true);
       return;
     }
-    if (_isTrafficPolice && _licenseImage == null) {
-      setState(() => _licenseImageError = true);
-      return;
-    }
 
     setState(() => _isLoading = true);
     try {
+      // Verify Bangladeshi NID (name + phone + birth date) before sign up.
+      if (_birthDate == null) {
+        throw StateError('Please select your date of birth.');
+      }
+      if (!NidService.isValidNidFormat(_nidController.text)) {
+        throw StateError('Please enter a valid 10/13/17-digit Bangladeshi NID.');
+      }
+      final verified = await NidService.verifyNid(
+        nidNumber: _nidController.text,
+        fullName: _nameController.text,
+        phoneNumber: _phoneController.text,
+        dateOfBirth: _birthDate!,
+      );
+      if (!verified) {
+        throw StateError(
+          'NID details do not match. Please check your name, phone and '
+          'date of birth.',
+        );
+      }
       await _authService.register(
         name: _nameController.text,
         email: _emailController.text,
@@ -63,16 +80,13 @@ class _RegisterPageState extends State<RegisterPage> {
         vehicleType: _selectedVehicleType,
         vehicleNumber: _vehicleNumberController.text,
         licenseImagePath: _licenseImage?.path,
-        policeId: _policeIdController.text,
-        assignedIntersection: _intersectionController.text,
-        badgeImage: _isTrafficPolice ? _licenseImage : null,
       );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            (_isDriver || _isTrafficPolice)
+            _isDriver
                 ? 'Registration submitted for admin approval.'
                 : 'Account created successfully.',
           ),
@@ -144,6 +158,7 @@ class _RegisterPageState extends State<RegisterPage> {
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
+    _nidController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -204,6 +219,23 @@ class _RegisterPageState extends State<RegisterPage> {
                   validator: (value) => _required(value, 'Please enter your phone number.'),
                 ),
                 const SizedBox(height: 16),
+                _buildTextField(
+                  controller: _nidController,
+                  label: 'NID Number (10/13/17 digits)',
+                  icon: Icons.badge_rounded,
+                  keyboardType: TextInputType.number,
+                  validator: (value) {
+                    final nid = value?.trim() ?? '';
+                    if (nid.isEmpty) return 'Please enter your NID number.';
+                    if (!NidService.isValidNidFormat(nid)) {
+                      return 'NID must be 10, 13 or 17 digits.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+                _buildBirthDateField(),
+                const SizedBox(height: 16),
                 _buildCityDropdown(),
                 const SizedBox(height: 16),
                 _buildTextField(
@@ -261,32 +293,6 @@ class _RegisterPageState extends State<RegisterPage> {
                   const SizedBox(height: 16),
                   _buildLicenseImagePicker(),
                 ],
-                if (_isTrafficPolice) ...[
-                  const SizedBox(height: 16),
-                  _buildTextField(
-                    controller: _policeIdController,
-                    label: 'Official Police ID',
-                    icon: Icons.badge_rounded,
-                    validator: (value) => _required(
-                      value,
-                      'Please enter your official police ID.',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _buildTextField(
-                    controller: _intersectionController,
-                    label: 'Assigned Intersection',
-                    icon: Icons.traffic_rounded,
-                    validator: (value) => _required(
-                      value,
-                      'Please enter your assigned intersection.',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  _buildLicenseImagePicker(
-                    label: 'Upload Police ID Badge',
-                  ),
-                ],
                 const SizedBox(height: 32),
                 SizedBox(
                   width: double.infinity,
@@ -318,12 +324,40 @@ class _RegisterPageState extends State<RegisterPage> {
   String? _required(String? value, String message) =>
       value == null || value.trim().isEmpty ? message : null;
 
+  Widget _buildBirthDateField() {
+    final label = _birthDate == null
+        ? 'Date of Birth'
+        : '${_birthDate!.day.toString().padLeft(2, '0')}/'
+            '${_birthDate!.month.toString().padLeft(2, '0')}/'
+            '${_birthDate!.year}';
+    return InkWell(
+      onTap: () async {
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: _birthDate ?? DateTime(2000, 1, 1),
+          firstDate: DateTime(1900),
+          lastDate: DateTime.now(),
+        );
+        if (picked != null) setState(() => _birthDate = picked);
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: InputDecorator(
+        decoration: _inputDecoration('Date of Birth', Icons.calendar_today_rounded),
+        child: Text(
+          label,
+          style: GoogleFonts.poppins(
+            color: _birthDate == null ? AppColors.textGrey : AppColors.textDark,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildRoleSwitcher() {
     return SegmentedButton<String>(
       segments: const [
         ButtonSegment(value: 'patient', label: Text('Patient'), icon: Icon(Icons.person_rounded)),
         ButtonSegment(value: 'driver', label: Text('Rider / Driver'), icon: Icon(Icons.drive_eta_rounded)),
-        ButtonSegment(value: 'traffic_police', label: Text('Traffic Police'), icon: Icon(Icons.traffic_rounded)),
       ],
       selected: {_role},
       onSelectionChanged: (selection) {
