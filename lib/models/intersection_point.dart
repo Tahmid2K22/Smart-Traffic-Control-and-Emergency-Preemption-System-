@@ -35,10 +35,16 @@ class IntersectionPoint {
 
   static const emergencyRadiusMeters = 500.0;
 
-  // VGX3+G39 recovered relative to Khulna: 7MJFVGX3+G39.
+  /// Escape requests target the light itself, so they are allowed from
+  /// farther away than the automatic along-route preemption trigger
+  /// ([emergencyRadiusMeters]). Any intersection in this range can be
+  /// chosen — no assigned traffic officer is required.
+  static const escapeRequestRadiusMeters = 1000.0;
+
+  // VGX3+G39 recovered relative to Khulna: 7MJFVGX3+G39 (Durbar Bangla, KUET).
   static const khulna = IntersectionPoint(
-    id: 'khulna_vgx3_g39',
-    name: 'VGX3+G39, Khulna',
+    id: 'khulna_durbar_bangla',
+    name: 'Durbar Bangla, KUET, Khulna',
     city: 'Khulna',
     latitude: 22.8987875,
     longitude: 89.502734375,
@@ -173,7 +179,7 @@ class IntersectionPoint {
   }
 
   bool canRequestFrom(double lat, double lng) =>
-      isActive && distanceFrom(lat, lng) <= emergencyRadiusMeters;
+      isActive && distanceFrom(lat, lng) <= escapeRequestRadiusMeters;
 
   bool matchesOfficer({
     String? intersectionId,

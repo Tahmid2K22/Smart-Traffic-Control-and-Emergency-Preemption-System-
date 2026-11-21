@@ -3,18 +3,22 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/intersection_point.dart';
+import '../services/push_notification_service.dart';
 import '../services/traffic_rtdb_service.dart';
+import '../services/traffic_service.dart';
 
 /// Traffic-light control over Firebase Realtime Database.
 ///
 /// The officer picks the intersection to control (their assigned one is the
-/// default), sees it on an OpenStreetMap tile and can preempt any direction's
-/// colour. The board is ALWAYS in AUTO mode (boots straight into the cycle);
-/// one small write per tap, no polling.
+/// default), sees it on an OpenStreetMap tile and toggles AUTO/MANUAL mode.
+/// In MANUAL the per-direction colour buttons are shown and lights change
+/// only on those clicks; in AUTO the cycle runs on its own. One small write
+/// per tap, no polling.
 class SimpleTrafficPage extends StatefulWidget {
   const SimpleTrafficPage({super.key, this.assignedIntersection});
 
@@ -37,9 +41,12 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
     mode: 'unknown',
     phase: 'unknown',
     lights: {},
+    priority: '',
     updated: null,
   );
   bool _sending = false;
+  bool _releasing = false;
+  final _pushService = PushNotificationService();
 
   @override
   void initState() {
@@ -47,6 +54,9 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
     _selected = _resolveAssigned();
     _service = TrafficRtdbService(intersectionId: _selected.id);
     _subscribe();
+    // Register the officer's FCM token so escape requests reach them as
+    // push notifications (token saved on users/{uid}.fcmTokens).
+    unawaited(_pushService.registerForCurrentUser());
   }
 
   IntersectionPoint _resolveAssigned() {
@@ -57,7 +67,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
       }
     }
     // Default: the intersection with the live controller.
-    return IntersectionPoint.royal;
+    return IntersectionPoint.khulna;
   }
 
   void _subscribe() {
@@ -77,6 +87,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
         mode: 'unknown',
         phase: 'unknown',
         lights: {},
+        priority: '',
         updated: null,
       );
     });
@@ -87,6 +98,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   @override
   void dispose() {
     unawaited(_sub?.cancel());
+    _pushService.dispose();
     super.dispose();
   }
 
@@ -132,6 +144,25 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
       _notice('Failed to send $label: $error');
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  /// Manual release by a traffic officer: the light returns to its normal
+  /// AUTO cycle right away (the app also releases automatically once the
+  /// ambulance leaves the ~1 km ring, and the driver can release too).
+  Future<void> _releaseAmbulance() async {
+    if (_releasing) return;
+    setState(() => _releasing = true);
+    try {
+      await TrafficService().releaseEscape(
+        intersectionId: _service.intersectionId,
+        source: EscapeReleaseSource.police,
+      );
+      _notice('Ambulance priority released — back to AUTO');
+    } catch (error) {
+      _notice('Failed to release: $error');
+    } finally {
+      if (mounted) setState(() => _releasing = false);
     }
   }
 
@@ -226,10 +257,92 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
             ],
           ),
 
-          // Crossroad view: north / east+west / south.
+          // AUTO / MANUAL mode toggle. Selecting AUTO gets all lights to red
+          // and starts the cycle; MANUAL freezes the lights until a colour
+          // button is tapped. Locked while ambulance priority is active.
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('AUTO mode'),
+            subtitle: Text(
+              online
+                  ? (_state.priority == 'ambulance'
+                      ? 'Locked — ambulance priority active'
+                      : _state.mode == 'auto'
+                          ? 'Cycling N-E-S-W automatically'
+                          : 'MANUAL — lights change only on button clicks')
+                  : 'Offline — turn on the controller',
+            ),
+            value: online && _state.mode == 'auto',
+            onChanged: online && !_sending && _state.priority != 'ambulance'
+                ? (auto) => _send(() => _service.setMode(auto),
+                    auto ? 'AUTO' : 'MANUAL')
+                : null,
+          ),
+          const SizedBox(height: 8),
+
+          // Ambulance priority banner: preemption is latched by a driver
+          // emergency escape; controls stay locked until it is released —
+          // automatically past 1 km, or manually here by the officer.
+          if (_state.priority == 'ambulance') ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade700,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.emergency, color: Colors.white, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '🚑 Ambulance priority — controls locked until it passes',
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _releasing ? null : _releaseAmbulance,
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.white24,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: _releasing
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Release', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          // Crossroad view: north / east+west / south. Colour buttons are
+          // shown only in MANUAL mode; in AUTO the cycle runs itself. Hidden
+          // during ambulance priority (the firmware ignores them anyway).
           _Crossroad(
             lights: _state.lights,
-            onSet: _sending || !online
+            manual:
+                _state.mode == 'manual' && _state.priority != 'ambulance',
+            onSet: _sending || !online || _state.priority == 'ambulance'
                 ? null
                 : (direction, color) => _send(
                     () => _service.setColor(direction, color),
@@ -286,7 +399,8 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Any positive seconds · AUTO always starts from all-red',
+                    'Any positive seconds · applying starts AUTO: all lights '
+                    'to red, then the N-E-S-W cycle',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -299,11 +413,17 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   }
 }
 
-/// The four signal heads laid out like a crossroad.
+/// The four signal heads laid out like a crossroad. Colour buttons are
+/// rendered only in MANUAL mode.
 class _Crossroad extends StatelessWidget {
-  const _Crossroad({required this.lights, required this.onSet});
+  const _Crossroad({
+    required this.lights,
+    required this.manual,
+    required this.onSet,
+  });
 
   final Map<String, String> lights;
+  final bool manual;
   final void Function(String direction, String color)? onSet;
 
   static const _colorOf = {
@@ -373,14 +493,17 @@ class _Crossroad extends StatelessWidget {
           const SizedBox(height: 6),
           _head(direction),
           const SizedBox(height: 6),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _colorButton(direction, 'green', Colors.green),
-              _colorButton(direction, 'yellow', Colors.amber.shade700),
-              _colorButton(direction, 'red', Colors.red),
-            ],
-          ),
+          if (manual)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _colorButton(direction, 'green', Colors.green),
+                _colorButton(direction, 'yellow', Colors.amber.shade700),
+                _colorButton(direction, 'red', Colors.red),
+              ],
+            )
+          else
+            const SizedBox(height: 26),
         ],
       );
 

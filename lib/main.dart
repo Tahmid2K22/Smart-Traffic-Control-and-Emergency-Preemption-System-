@@ -30,8 +30,18 @@ void main() async {
     await AppConfig.load();
   } catch (_) {}
 
-  // Firebase is required — crash loudly if it fails
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // Firebase is required. Initialise defensively: on Android/iOS the native
+  // default app already exists (from google-services.json /
+  // GoogleService-Info.plist) before Dart runs, and passing options that
+  // differ from it makes the plugin throw `[core/duplicate-app]`. That would
+  // abort main() before runApp(), which is exactly what produces a blank
+  // white screen with no visible error.
+  try {
+    await _initializeFirebase();
+  } catch (error) {
+    runApp(SetupErrorApp(error: 'Firebase failed to start:\n\n$error'));
+    return;
+  }
 
   // Supabase is optional — driver features degrade if keys are not set
   try {
@@ -44,6 +54,22 @@ void main() async {
   }
 
   runApp(const AmbulanceApp());
+}
+
+/// Initialises Firebase without ever leaving the app half-started.
+///
+/// If the native default app is already registered with different options
+/// (the usual reason for `[core/duplicate-app]`), the existing app is reused —
+/// Realtime Database calls pass their URL explicitly anyway.
+Future<void> _initializeFirebase() async {
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } on FirebaseException catch (error) {
+    if (error.code != 'duplicate-app' || Firebase.apps.isEmpty) rethrow;
+    Firebase.app();
+  }
 }
 
 class SetupErrorApp extends StatelessWidget {
@@ -80,7 +106,7 @@ class SetupErrorApp extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  'The app could not start because some environment variables are missing or invalid:',
+                  'The app could not start. Details:',
                   style: TextStyle(fontSize: 16, color: Colors.black54),
                 ),
                 const SizedBox(height: 24),

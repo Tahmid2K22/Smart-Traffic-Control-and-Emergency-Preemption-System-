@@ -45,10 +45,18 @@ class DefaultFirebaseOptions {
     appId: '1:261691548059:web:126e748782093a6f1f013e',
     messagingSenderId: '261691548059',
     projectId: 'e-ambulance-system-001',
+    databaseURL:
+        'https://e-ambulance-system-001-default-rtdb.firebaseio.com',
     authDomain: 'e-ambulance-system-001.firebaseapp.com',
     storageBucket: 'e-ambulance-system-001.firebasestorage.app',
   );
 
+  // NOTE: Do NOT add `databaseURL` here. On Android/iOS the native default
+  // app is created from google-services.json / GoogleService-Info.plist
+  // *before* Dart runs; passing options that differ from it makes
+  // `Firebase.initializeApp` throw `[core/duplicate-app]`, which aborts
+  // main() and shows up as a blank white screen. Realtime Database is reached
+  // via `TrafficRtdbService`, which passes its URL explicitly.
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCkCKYfSLBEj4wLZUDOVCX4hIiauka2K9c',
     appId: '1:261691548059:android:9ba6cdf7fdd8a32c1f013e',
@@ -80,6 +88,8 @@ class DefaultFirebaseOptions {
     appId: '1:261691548059:web:2fdb2158e642bca41f013e',
     messagingSenderId: '261691548059',
     projectId: 'e-ambulance-system-001',
+    databaseURL:
+        'https://e-ambulance-system-001-default-rtdb.firebaseio.com',
     authDomain: 'e-ambulance-system-001.firebaseapp.com',
     storageBucket: 'e-ambulance-system-001.firebasestorage.app',
   );

@@ -29,6 +29,7 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
   String _query = '';
   String? _locationError;
   String? _sendingId;
+  bool _releasing = false;
   bool _locating = false;
   int _locationGeneration = 0;
   bool _locationServicesDisabled = false;
@@ -175,30 +176,61 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
     }
   }
 
+  String get _dispatchId => widget.dispatchId?.trim() ?? '';
+
+  bool get _hasActiveRide => _dispatchId.isNotEmpty;
+
   Future<void> _requestEscape(IntersectionPoint intersection) async {
     final position = _position;
     if (_sendingId != null || position == null || !intersection.isActive) {
       return;
     }
-    if (intersection.distanceFrom(position.latitude, position.longitude) >
-        500) {
+    if (!_hasActiveRide) {
       _showFeedback(
-        'Move within 500 m of this intersection to request an emergency escape.',
+        'Emergency escape is only available during an active ambulance trip.',
+      );
+      return;
+    }
+    if (intersection.distanceFrom(position.latitude, position.longitude) >
+        IntersectionPoint.escapeRequestRadiusMeters) {
+      _showFeedback(
+        'Move within ${IntersectionPoint.escapeRequestRadiusMeters.round()} m '
+        'of this intersection to request an emergency escape.',
       );
       return;
     }
     setState(() => _sendingId = intersection.id);
     try {
-      // The service obtains fresh GPS and revalidates driver, range and officers.
-      final count = await _trafficService.requestEmergencyEscape(
+      // The service obtains fresh GPS, revalidates driver and range, then
+      // preempts the light directly — no assigned officer is required.
+      final result = await _trafficService.requestEmergencyEscape(
         intersectionId: intersection.id,
-        dispatchId: widget.dispatchId,
+        dispatchId: _dispatchId,
       );
       if (!mounted) return;
-      _showFeedback(
-        'Emergency escape requested at ${intersection.name}. '
-        '$count ${count == 1 ? 'officer' : 'officers'} notified.',
-      );
+      String message;
+      if (!result.lightCommandSent) {
+        message = 'Escape request saved, but the light command could not be '
+            'sent. Check your connection and try again.';
+      } else if (!result.boardOnline) {
+        message = 'Command sent, but the light board did not report back. '
+            'Check the board\'s power and Wi-Fi at ${intersection.name}.';
+      } else if (!result.boardLatched) {
+        message = 'The board is online but did not latch the ambulance '
+            'priority yet — it may be mid-cycle. If it stays red, retry.';
+      } else if (result.boardApproachLight != 'green') {
+        message = 'The light latched, but your ${result.approachDirection} '
+            'approach shows ${result.boardApproachLight} — it may still be '
+            'finishing a change, or the approach direction was misdetected.';
+      } else {
+        message = 'Emergency escape confirmed at ${intersection.name}. '
+            'Your ${result.approachDirection} approach is green.';
+      }
+      if (result.officersNotified > 0) {
+        message += ' ${result.officersNotified} '
+            '${result.officersNotified == 1 ? 'officer' : 'officers'} notified.';
+      }
+      _showFeedback(message);
     } catch (error) {
       if (!mounted) return;
       _showFeedback(
@@ -213,6 +245,30 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Manual release by the driver: the light goes back to its normal cycle
+  /// immediately (the app also releases automatically past 1 km).
+  Future<void> _releaseEscape() async {
+    final escape = TrafficService.activeEscape.value;
+    if (escape == null || _releasing) return;
+    setState(() => _releasing = true);
+    try {
+      await _trafficService.releaseEscape(
+        intersectionId: escape.intersectionId,
+        source: EscapeReleaseSource.driver,
+      );
+      if (!mounted) return;
+      _showFeedback(
+        'Escape released — ${escape.intersectionName} is back to its '
+        'normal cycle.',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      _showFeedback('Could not release the escape. Please try again.');
+    } finally {
+      if (mounted) setState(() => _releasing = false);
+    }
   }
 
   @override
@@ -258,11 +314,42 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
               ),
             ),
             _buildLocationStatus(),
+            ValueListenableBuilder<ActiveEscape?>(
+              valueListenable: TrafficService.activeEscape,
+              builder: (context, escape, _) => escape == null
+                  ? const SizedBox.shrink()
+                  : _buildActiveEscape(escape),
+            ),
+            if (!_hasActiveRide)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.info_outline_rounded,
+                      size: 18,
+                      color: AppColors.warning,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Emergency escape is only available during an active '
+                        'ambulance trip. Accept a ride to enable it.',
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          color: AppColors.warning,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
               child: Text(
-                'Browse anytime. Emergency escape requests require you to be within '
-                '500 m. Your location and eligibility are checked again when sending.',
+                'Browse anytime. Emergency escape requests require an active '
+                'trip and you to be within 1 km. Your location and '
+                'eligibility are checked again when sending.',
                 style: GoogleFonts.poppins(
                   fontSize: 12,
                   color: AppColors.textGrey,
@@ -386,12 +473,92 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
     );
   }
 
+  Widget _buildActiveEscape(ActiveEscape escape) {
+    final position = _position;
+    final distance = position == null
+        ? null
+        : escape.distanceFrom(position.latitude, position.longitude);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.primaryLight,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.primary),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.emergency_rounded,
+                color: AppColors.primary,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Escape active · ${escape.intersectionName}',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textDark,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            distance == null
+                ? 'Your ${escape.approachDirection} approach is held green. '
+                      'It releases automatically once you are more than '
+                      '${IntersectionPoint.escapeRequestRadiusMeters.round()} m away.'
+                : '${distance.round()} m from the junction · releases '
+                      'automatically past '
+                      '${IntersectionPoint.escapeRequestRadiusMeters.round()} m.',
+            style: GoogleFonts.poppins(fontSize: 12, color: AppColors.textGrey),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _releasing ? null : _releaseEscape,
+              icon: _releasing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.stop_circle_outlined, size: 18),
+              label: Text(
+                _releasing ? 'Releasing…' : 'Release escape now',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+              ),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                side: const BorderSide(color: AppColors.primary),
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildIntersection(IntersectionPoint intersection) {
     final position = _position;
     final distance = position == null
         ? null
         : intersection.distanceFrom(position.latitude, position.longitude);
-    final inRange = distance != null && distance <= 500;
+    final inRange =
+        distance != null &&
+        distance <= IntersectionPoint.escapeRequestRadiusMeters;
     final sending = _sendingId == intersection.id;
     final distanceLabel = distance == null
         ? 'Distance unavailable'
@@ -448,7 +615,7 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: inRange && _sendingId == null
+              onPressed: inRange && _hasActiveRide && _sendingId == null
                   ? () => _requestEscape(intersection)
                   : null,
               style: FilledButton.styleFrom(
@@ -472,13 +639,15 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
               label: Text(sending ? 'Sending…' : 'Request emergency escape'),
             ),
           ),
-          if (!inRange)
+          if (!inRange || !_hasActiveRide)
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
-                distance == null
+                !_hasActiveRide
+                    ? 'Accept a ride to request an escape.'
+                    : distance == null
                     ? 'Enable live location to request.'
-                    : 'Move within 500 m to request.',
+                    : 'Move within 1 km to request.',
                 style: GoogleFonts.poppins(
                   fontSize: 12,
                   color: AppColors.textGrey,

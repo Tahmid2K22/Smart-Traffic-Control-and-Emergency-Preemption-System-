@@ -10,29 +10,29 @@ void main() {
       point.latitude + meters / 6371000 * 180 / math.pi;
 
   test('Khulna seed contains the decoded Plus Code center', () {
-    expect(point.id, 'khulna_vgx3_g39');
+    expect(point.id, 'khulna_durbar_bangla');
     expect(point.plusCode, 'VGX3+G39');
     expect(point.latitude, closeTo(22.8987875, 1e-10));
     expect(point.longitude, closeTo(89.502734375, 1e-10));
     expect(point.distanceFrom(point.latitude, point.longitude), 0);
   });
 
-  test('allows requests within 500 m, including at the intersection', () {
+  test('allows escape requests within 1 km, including at the intersection', () {
     expect(point.canRequestFrom(point.latitude, point.longitude), isTrue);
     expect(
-      point.canRequestFrom(latitudeAtDistance(499.99), point.longitude),
+      point.canRequestFrom(latitudeAtDistance(999.99), point.longitude),
       isTrue,
     );
     expect(
-      point.distanceFrom(latitudeAtDistance(500), point.longitude),
-      closeTo(500, 1e-6),
+      point.distanceFrom(latitudeAtDistance(1000), point.longitude),
+      closeTo(1000, 1e-6),
     );
     expect(
-      point.canRequestFrom(latitudeAtDistance(500.01), point.longitude),
+      point.canRequestFrom(latitudeAtDistance(1000.01), point.longitude),
       isFalse,
     );
     expect(
-      point.canRequestFrom(latitudeAtDistance(700), point.longitude),
+      point.canRequestFrom(latitudeAtDistance(1200), point.longitude),
       isFalse,
     );
   });

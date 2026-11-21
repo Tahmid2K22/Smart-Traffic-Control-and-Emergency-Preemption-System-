@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -7,9 +8,12 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../constants/colors.dart';
+import '../../models/intersection_point.dart';
 import '../../models/message_model.dart';
 import '../../models/request_model.dart';
 import '../../services/request_service.dart';
+import '../../services/route_service.dart';
+import '../../services/traffic_rtdb_service.dart';
 import '../../services/traffic_service.dart';
 import '../../services/map_search_service.dart';
 import '../chat_page.dart';
@@ -46,6 +50,24 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   // countdown for auto-reject
   Timer? _countdownTimer;
   int _countdown = 30;
+
+  // Emergency signal priority: armed by the driver during an active trip.
+  // The trigger is ROUTE-AWARE: the junction must lie on the planned trip
+  // path (Google Directions geometry) less than 1 km of DRIVING ahead —
+  // a plain 1 km radius is only the fallback when no route is available.
+  // Entering that window requests preemption; passing the junction (or
+  // disarming / trip end) releases the light back to its AUTO cycle.
+  static const _preemptAheadMeters = 1000.0;
+  static const _preemptOnRouteMeters = 80.0;
+  static const _preemptRadiusFallbackMeters = 1000.0;
+  static const _releaseRadiusMeters = 1200.0;
+  bool _emergencyArmed = false;
+  bool _preemptSent = false;
+  double? _preemptedAlong; // junction offset on the route when triggered
+  TrafficRtdbService? _preemptService;
+  final _routeService = RouteService();
+  List<LatLng>? _routePoints;
+  String? _routeRequestId;
 
   // unread chat badge
   int _unreadCount = 0;
@@ -98,6 +120,8 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       _pendingSub?.cancel();
       _activeSub?.cancel();
       _locationSub?.cancel();
+      // Offline: nothing may keep holding a light green.
+      TrafficService.releaseActiveEscape(EscapeReleaseSource.driver);
       setState(() {
         _allPendingRequests = [];
         _pendingRequests = [];
@@ -128,6 +152,10 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
           setState(() => _activeRequest = req);
           // Start or stop chat unread listener when active request changes
           if (req?.id != prevReq?.id) {
+            if (req == null && prevReq != null) {
+              // Trip over: drop any emergency escape still holding a green.
+              TrafficService.releaseActiveEscape(EscapeReleaseSource.driver);
+            }
             _chatSub?.cancel();
             _lastSeenMessageCount = 0;
             _unreadCount = 0;
@@ -164,6 +192,20 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   }
 
   Future<void> _prepareTrafficSignals(AmbulanceRequest request) async {
+    // Route for the along-path preemption trigger (same geometry each trip).
+    if (_routeRequestId != request.id) {
+      _routeRequestId = request.id;
+      _routePoints = null;
+      _preemptedAlong = null;
+      try {
+        _routePoints = await _routeService.fetchRoutePoints(
+          origin: LatLng(request.pickupLat, request.pickupLng),
+          destination: LatLng(request.destinationLat, request.destinationLng),
+        );
+      } catch (_) {
+        // Route unavailable: the radius fallback stays in charge.
+      }
+    }
     try {
       final route = await _mapSearchService.getDrivingRoute(
         start: LatLng(request.pickupLat, request.pickupLng),
@@ -240,7 +282,157 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
               position: pos,
             );
           }
+          unawaited(_checkEmergencyPreempt(pos));
         });
+  }
+
+  // ── Emergency signal priority ──────────────────────────────────────────────
+
+  /// Geofence check on every GPS fix. One RTDB write per boundary crossing.
+  /// Primary trigger: the junction lies ON the trip route and is less than
+  /// 1 km of driving ahead. Fallback (no route available): the plain 1 km
+  /// radius. Release when the junction is passed along the route, the
+  /// ambulance leaves the 1.2 km radius, or the trip/arming ends.
+  Future<void> _checkEmergencyPreempt(Position pos) async {
+    // A manually requested escape owns the light right now — don't send our
+    // own preemption or release commands until it is over.
+    if (TrafficService.activeEscape.value != null) return;
+    if (!_emergencyArmed || _activeRequest == null) {
+      if (_preemptSent) await _releasePreempt();
+      return;
+    }
+    final route = _routePoints;
+    if (route != null && route.length >= 2) {
+      await _checkPreemptAlongRoute(route, pos);
+    } else {
+      await _checkPreemptByRadius(pos);
+    }
+  }
+
+  Future<void> _checkPreemptAlongRoute(
+    List<LatLng> route,
+    Position pos,
+  ) async {
+    final here = RouteService.locate(
+      route: route,
+      position: LatLng(pos.latitude, pos.longitude),
+    );
+
+    // Nearest junction that is on the route and ahead of us.
+    IntersectionPoint? target;
+    var bestRemaining = double.infinity;
+    var bestAlong = 0.0;
+    for (final point in IntersectionPoint.khulnaIntersections) {
+      final at = RouteService.locate(
+        route: route,
+        position: LatLng(point.latitude, point.longitude),
+      );
+      final remaining = at.alongMeters - here.alongMeters;
+      if (at.crossMeters <= _preemptOnRouteMeters &&
+          remaining > -30 &&
+          remaining <= _preemptAheadMeters &&
+          remaining < bestRemaining) {
+        bestRemaining = remaining;
+        bestAlong = at.alongMeters;
+        target = point;
+      }
+    }
+
+    if (target != null && !_preemptSent) {
+      final dir = _approachDirection(target, pos.latitude, pos.longitude);
+      if (dir == null) return;
+      final service = TrafficRtdbService(intersectionId: target.id);
+      try {
+        await service.ambulancePreempt(dir);
+        _preemptService = service;
+        _preemptedAlong = bestAlong;
+        if (mounted) setState(() => _preemptSent = true);
+        if (mounted) _showSnack('🚑 Preemption requested at ${target.name}');
+      } catch (_) {
+        // Network hiccup: the next GPS fix retries.
+      }
+      return;
+    }
+
+    if (_preemptSent) {
+      final passed = _preemptedAlong != null &&
+          here.alongMeters > _preemptedAlong! + 30;
+      final leftRoute = here.crossMeters > _releaseRadiusMeters;
+      if (passed || leftRoute) await _releasePreempt();
+    }
+  }
+
+  /// Plain-radius fallback when the trip route is unavailable.
+  Future<void> _checkPreemptByRadius(Position pos) async {
+    IntersectionPoint? nearest;
+    var best = double.infinity;
+    for (final point in IntersectionPoint.khulnaIntersections) {
+      final d = point.distanceFrom(pos.latitude, pos.longitude);
+      if (d < best) {
+        best = d;
+        nearest = point;
+      }
+    }
+    if (nearest == null) return;
+    if (best <= _preemptRadiusFallbackMeters && !_preemptSent) {
+      final dir = _approachDirection(nearest, pos.latitude, pos.longitude);
+      if (dir == null) return;
+      final service = TrafficRtdbService(intersectionId: nearest.id);
+      try {
+        await service.ambulancePreempt(dir);
+        _preemptService = service;
+        if (mounted) setState(() => _preemptSent = true);
+        if (mounted) _showSnack('🚑 Preemption requested at ${nearest.name}');
+      } catch (_) {
+        // Network hiccup: the next GPS fix retries.
+      }
+    } else if (best > _releaseRadiusMeters && _preemptSent) {
+      await _releasePreempt();
+    }
+  }
+
+  /// Bearing from the ambulance to the intersection, snapped to the nearest
+  /// approach arm (which signal the ambulance obeys when it arrives).
+  String? _approachDirection(IntersectionPoint point, double lat, double lng) {
+    final dLng = (point.longitude - lng) * math.pi / 180;
+    final lat1 = lat * math.pi / 180;
+    final lat2 = point.latitude * math.pi / 180;
+    final y = math.sin(dLng) * math.cos(lat2);
+    final x = math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
+    final bearing = (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+    // 0/90/180/270 = N/E/S/W arms; +180 because the arm is where the
+    // ambulance comes FROM, i.e. opposite of the bearing-to-intersection.
+    const dirs = ['north', 'east', 'south', 'west'];
+    return dirs[(((bearing + 180 + 45) ~/ 90)) % 4];
+  }
+
+  Future<void> _releasePreempt() async {
+    final service = _preemptService;
+    _preemptService = null;
+    if (mounted) setState(() => _preemptSent = false);
+    // Never release a light that a manually requested escape is holding —
+    // the escape's own watcher releases it (range exit, driver or officer).
+    final escape = TrafficService.activeEscape.value;
+    if (escape != null && escape.intersectionId == service?.intersectionId) {
+      return;
+    }
+    try {
+      await service?.releaseAmbulance();
+    } catch (_) {
+      // Best-effort: the firmware's max-hold watchdog recovers anyway.
+    }
+  }
+
+  Future<void> _toggleEmergency(bool armed) async {
+    setState(() => _emergencyArmed = armed);
+    if (!armed) {
+      await _releasePreempt();
+      return;
+    }
+    // Already inside the zone? Fire immediately (GPS may be stationary).
+    final pos = _latestPosition;
+    if (pos != null) await _checkEmergencyPreempt(pos);
   }
 
   // ── Accept / Reject ────────────────────────────────────────────────────────
@@ -693,6 +885,58 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                   icon: Icons.attach_money_rounded,
                   label: 'Fare',
                   value: '৳${req.estimatedFare}',
+                ),
+                const SizedBox(height: 12),
+                // Emergency signal priority: greens the light for the
+                // ambulance's approach when it comes within 1 km.
+                Container(
+                  decoration: BoxDecoration(
+                    color: _emergencyArmed
+                        ? Colors.red.withAlpha(20)
+                        : AppColors.background,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: _emergencyArmed ? Colors.red : AppColors.cardBorder,
+                    ),
+                  ),
+                  child: SwitchListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                    dense: true,
+                    activeThumbColor: Colors.red,
+                    title: Row(
+                      children: [
+                        Icon(
+                          Icons.emergency,
+                          size: 18,
+                          color: _emergencyArmed ? Colors.red : AppColors.textGrey,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Emergency signal priority',
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: _emergencyArmed
+                                ? Colors.red
+                                : AppColors.textDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                    subtitle: Text(
+                      _preemptSent
+                          ? '🚑 Preemption active — light held green for you'
+                          : _emergencyArmed
+                              ? 'Armed — greens junctions <1 km ahead on your route'
+                              : 'Turn on when you need green at junctions',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: AppColors.textGrey,
+                      ),
+                    ),
+                    value: _emergencyArmed,
+                    onChanged: _toggleEmergency,
+                  ),
                 ),
               ],
             ),

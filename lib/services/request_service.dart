@@ -385,6 +385,30 @@ class RequestService {
         );
   }
 
+  /// Whether [requestId] is an active ride (accepted/en_route/arrived) that
+  /// belongs to the signed-in driver. Used to gate emergency escape requests:
+  /// they are only allowed while the ambulance is on an active trip.
+  static Future<bool> isActiveRideForCurrentDriver(String requestId) async {
+    if (!supabaseReady) return false;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return false;
+    final driver = await sb
+        .from(SupabaseTables.drivers)
+        .select('id')
+        .eq('firebase_uid', uid)
+        .maybeSingle();
+    if (driver == null) return false;
+    final row = await sb
+        .from(SupabaseTables.requests)
+        .select('id, driver_id, status')
+        .eq('id', requestId)
+        .maybeSingle();
+    if (row == null) return false;
+    final status = row['status'] as String?;
+    return row['driver_id'] == driver['id'] &&
+        (status == 'accepted' || status == 'en_route' || status == 'arrived');
+  }
+
   // ── Chat / messaging ────────────────────────────────────────────────────────
 
   /// Sends a chat message for a given request.
