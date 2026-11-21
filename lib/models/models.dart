@@ -54,6 +54,9 @@ class HospitalModel {
 
   factory HospitalModel.fromDoc(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+    final location = data['location'] as GeoPoint?;
+    final lat = (data['lat'] as num?)?.toDouble() ?? location?.latitude ?? 0.0;
+    final lon = (data['lon'] as num?)?.toDouble() ?? location?.longitude ?? 0.0;
     return HospitalModel(
       id: doc.id,
       name: data['name'] as String? ?? '',
@@ -61,8 +64,8 @@ class HospitalModel {
       address: data['address'] as String? ?? '',
       email: data['email'] as String? ?? '',
       phone: data['phone'] as String? ?? '',
-      lat: (data['lat'] as num?)?.toDouble() ?? 0.0,
-      lon: (data['lon'] as num?)?.toDouble() ?? 0.0,
+      lat: lat,
+      lon: lon,
       beds: (data['beds'] as num?)?.toInt() ?? 0,
       services: List<String>.from(data['services'] as List? ?? []),
       diagnoses: List<String>.from(data['diagnoses'] as List? ?? []),
@@ -73,17 +76,17 @@ class HospitalModel {
   }
 
   Map<String, dynamic> toMap() => {
-        'name': name,
-        'city': city,
-        'lat': lat,
-        'lon': lon,
-        'beds': beds,
-        'services': services,
-        'diagnoses': diagnoses,
-        'isApproved': isApproved,
-        'registeredBy': registeredBy,
-        'createdAt': createdAt ?? FieldValue.serverTimestamp(),
-      };
+    'name': name,
+    'city': city,
+    'lat': lat,
+    'lon': lon,
+    'beds': beds,
+    'services': services,
+    'diagnoses': diagnoses,
+    'isApproved': isApproved,
+    'registeredBy': registeredBy,
+    'createdAt': createdAt ?? FieldValue.serverTimestamp(),
+  };
 }
 
 // ── Admin activity log ────────────────────────────────────────────────────────
@@ -92,8 +95,8 @@ class AdminLog {
   final String id;
   final String adminUid;
   final String adminName;
-  final String action;       // e.g. 'approve_hospital', 'reject_driver'
-  final String targetType;   // 'hospital' | 'driver' | 'user'
+  final String action; // e.g. 'approve_hospital', 'reject_driver'
+  final String targetType; // 'hospital' | 'driver' | 'user'
   final String targetId;
   final String targetName;
   final Timestamp? timestamp;

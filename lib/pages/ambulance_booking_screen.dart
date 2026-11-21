@@ -12,11 +12,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../constants/colors.dart';
-import '../models/models.dart';
 import '../services/map_search_service.dart';
 import '../services/places_api_service.dart';
 import '../services/request_service.dart';
-import '../services/hospital_service.dart';
 import 'tracking_page.dart';
 
 class AmbulanceBookingScreen extends StatefulWidget {
@@ -39,13 +37,10 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   Geocoding? _geocoder;
   final _mapSearchService = MapSearchService();
   final _placesApi = PlacesApiService();
-  final _hospitalService = HospitalService();
   Timer? _autocompleteTimer;
   int _autocompleteRequestId = 0;
-  StreamSubscription<QuerySnapshot>? _hospitalSubscription;
   List<PlaceSuggestion> _destinationSuggestions = const [];
   List<String> _recentSearches = const [];
-  List<HospitalModel> _approvedHospitals = const [];
   GoogleMapController? _mapController;
   Set<Polyline> _routePolylines = const {};
   LatLng? _pickup;
@@ -65,8 +60,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       'Basic Ambulance',
       'Standard transport',
       'First aid, stretcher',
-      800,
-      35,
+      400,
+      18,
       Icons.local_shipping_rounded,
       Color(0xFF4A90E2),
     ),
@@ -74,8 +69,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       'ICU Ambulance',
       'Critical care equipped',
       'Ventilator, monitor, nurse',
-      1800,
-      55,
+      900,
+      28,
       Icons.monitor_heart_rounded,
       AppColors.primary,
     ),
@@ -83,8 +78,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       'Oxygen / Neonatal',
       'Specialized transport',
       'Oxygen, incubator, specialist',
-      2200,
-      65,
+      1100,
+      33,
       Icons.air_rounded,
       Color(0xFF009688),
     ),
@@ -94,20 +89,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   void initState() {
     super.initState();
     _loadRecentSearches();
-    _hospitalSubscription = _hospitalService.approvedHospitalsStream().listen(
-      (snapshot) {
-        if (!mounted) return;
-        setState(() {
-          _approvedHospitals = snapshot.docs
-              .map(HospitalModel.fromDoc)
-              .where((hospital) => hospital.lat != 0 && hospital.lon != 0)
-              .toList();
-        });
-      },
-      onError: (_) {
-        if (mounted) setState(() => _approvedHospitals = const []);
-      },
-    );
     _loadCurrentLocation();
   }
 
@@ -140,7 +121,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     _destinationController.dispose();
     _destinationFocus.dispose();
     _autocompleteTimer?.cancel();
-    _hospitalSubscription?.cancel();
     _placesApi.dispose();
     _mapSearchService.dispose();
     super.dispose();
@@ -492,23 +472,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
 
   Set<Marker> _markers() {
     final markers = <Marker>{};
-    for (final hospital in _approvedHospitals) {
-      final isClinic = _isClinic(hospital);
-      markers.add(
-        Marker(
-          markerId: MarkerId('facility-${hospital.id}'),
-          position: LatLng(hospital.lat, hospital.lon),
-          infoWindow: InfoWindow(
-            title: hospital.name,
-            snippet: isClinic ? 'Clinic' : 'Medical hospital',
-          ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            isClinic ? BitmapDescriptor.hueOrange : BitmapDescriptor.hueGreen,
-          ),
-          onTap: () => _selectHospital(hospital),
-        ),
-      );
-    }
     if (_pickup != null) {
       markers.add(
         Marker(
@@ -533,28 +496,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       );
     }
     return markers;
-  }
-
-  bool _isClinic(HospitalModel hospital) {
-    final text =
-        '${hospital.name} ${hospital.address} ${hospital.services.join(' ')}'
-            .toLowerCase();
-    return text.contains('clinic') ||
-        text.contains('diagnostic') ||
-        text.contains('medical centre') ||
-        text.contains('medical center');
-  }
-
-  void _selectHospital(HospitalModel hospital) {
-    final point = LatLng(hospital.lat, hospital.lon);
-    setState(() {
-      _destination = point;
-      _mapCenter = point;
-      _destinationController.text = hospital.name;
-    });
-    _destinationFocus.unfocus();
-    _mapController?.animateCamera(CameraUpdate.newLatLng(point));
-    _optimizeRoute();
   }
 
   @override
@@ -606,8 +547,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
                 onPressed: _recenter,
               ),
             ),
-          if (!picking && _approvedHospitals.isNotEmpty)
-            const Positioned(top: 16, left: 16, child: _FacilityLegend()),
           if (picking)
             _MapPinSheet(
               isPickup: _mode == _BookingMode.pickingPickup,
@@ -650,7 +589,6 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
                 onSelected: (index) =>
                     setState(() => _selectedAmbulance = index),
                 onRequest: _requestAmbulance,
-                onHospitalSelected: _selectHospital,
               ),
             ),
         ],
@@ -682,8 +620,6 @@ class _TripPlanningSheet extends StatelessWidget {
     required this.onSetDestinationOnMap,
     required this.onSelected,
     required this.onRequest,
-    // hospital destination
-    required this.onHospitalSelected,
   });
 
   final ScrollController scrollController;
@@ -707,7 +643,6 @@ class _TripPlanningSheet extends StatelessWidget {
   final VoidCallback onSetDestinationOnMap;
   final ValueChanged<int> onSelected;
   final VoidCallback onRequest;
-  final void Function(HospitalModel) onHospitalSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -837,17 +772,6 @@ class _TripPlanningSheet extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 16),
-          const Text(
-            'Select Hospital Destination',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textDark,
-            ),
-          ),
-          const SizedBox(height: 8),
-          _ApprovedHospitalList(onSelected: onHospitalSelected),
-          const SizedBox(height: 12),
           const Text(
             'Choose ambulance type',
             style: TextStyle(
@@ -1115,6 +1039,7 @@ class _RecentLocation extends StatelessWidget {
     ),
   );
 }
+
 class _TierCard extends StatelessWidget {
   const _TierCard({
     required this.tier,
@@ -1220,48 +1145,6 @@ class _MapActionButton extends StatelessWidget {
   );
 }
 
-class _FacilityLegend extends StatelessWidget {
-  const _FacilityLegend();
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: EdgeInsets.zero,
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            _LegendItem(color: Colors.green, label: 'Medical hospital'),
-            SizedBox(height: 4),
-            _LegendItem(color: Colors.orange, label: 'Clinic'),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LegendItem extends StatelessWidget {
-  const _LegendItem({required this.color, required this.label});
-
-  final Color color;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.location_on, size: 15, color: color),
-        const SizedBox(width: 4),
-        Text(label, style: const TextStyle(fontSize: 11)),
-      ],
-    );
-  }
-}
-
 class _AmbulanceTier {
   const _AmbulanceTier(
     this.name,
@@ -1279,163 +1162,4 @@ class _AmbulanceTier {
   final int perKm;
   final IconData icon;
   final Color color;
-}
-
-// ── Approved hospital list (live Firestore stream) ────────────────────────────
-
-class _ApprovedHospitalList extends StatefulWidget {
-  const _ApprovedHospitalList({required this.onSelected});
-  final void Function(HospitalModel) onSelected;
-
-  @override
-  State<_ApprovedHospitalList> createState() => _ApprovedHospitalListState();
-}
-
-class _ApprovedHospitalListState extends State<_ApprovedHospitalList> {
-  final _service = HospitalService();
-  String? _selectedId;
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder(
-      stream: _service.approvedHospitalsStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: LinearProgressIndicator(
-              minHeight: 2,
-              color: AppColors.primary,
-            ),
-          );
-        }
-        final docs = snapshot.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.background,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.cardBorder),
-            ),
-            child: const Text(
-              'No approved hospitals available yet.',
-              style: TextStyle(fontSize: 12, color: AppColors.textGrey),
-            ),
-          );
-        }
-        final hospitals = docs.map((d) => HospitalModel.fromDoc(d)).toList();
-        return Column(
-          children: hospitals.map((h) {
-            final isSelected = _selectedId == h.id;
-            return GestureDetector(
-              onTap: () {
-                setState(() => _selectedId = h.id);
-                widget.onSelected(h);
-              },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? AppColors.primary.withValues(alpha: 0.06)
-                      : AppColors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: isSelected
-                        ? AppColors.primary
-                        : AppColors.cardBorder,
-                    width: isSelected ? 1.5 : 1,
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryLight,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(
-                        Icons.local_hospital_rounded,
-                        color: AppColors.primary,
-                        size: 18,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            h.name,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textDark,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${h.city}  •  ${h.beds} beds',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: AppColors.textGrey,
-                            ),
-                          ),
-                          if (h.services.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Wrap(
-                                spacing: 4,
-                                children: h.services.take(3).map((s) {
-                                  return Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 7,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary.withValues(
-                                        alpha: 0.08,
-                                      ),
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      s,
-                                      style: const TextStyle(
-                                        fontSize: 9,
-                                        color: AppColors.primary,
-                                      ),
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      isSelected
-                          ? Icons.check_circle_rounded
-                          : Icons.radio_button_unchecked_rounded,
-                      color: isSelected
-                          ? AppColors.primary
-                          : AppColors.textLight,
-                      size: 20,
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }).toList(),
-        );
-      },
-    );
-  }
 }

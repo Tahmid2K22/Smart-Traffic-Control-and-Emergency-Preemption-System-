@@ -37,17 +37,21 @@ class _TrackingPageState extends State<TrackingPage> {
   StreamSubscription<AmbulanceRequest?>? _sub;
   StreamSubscription<int>? _nearbyDriversSub;
   Timer? _locationRefreshTimer;
+  Timer? _pendingTimeoutTimer;
   GoogleMapController? _mapController;
   final _mapSearchService = MapSearchService();
   Set<Polyline> _routePolylines = const {};
   int _nearbyDriverCount = 0;
   bool _updatingStatus = false;
+  bool _noDriverAvailable = false;
+  bool _expiringPendingRequest = false;
 
   static const _defaultCenter = LatLng(22.8996, 89.5023);
 
   @override
   void initState() {
     super.initState();
+    RequestService.expireStalePendingRequests();
     _sub = RequestService.streamRequest(widget.requestId).listen((req) {
       if (!mounted) return;
       final routeChanged = req != null && req.id != _request?.id;
@@ -57,6 +61,7 @@ class _TrackingPageState extends State<TrackingPage> {
               req.status != _request?.status ||
               req.driverId != _request?.driverId);
       setState(() => _request = req);
+      _syncPendingTimeout(req);
       if (routeChanged) _loadRoute(req);
       if (dispatchChanged) _watchNearbyDrivers(req);
       _animateToRelevantPin();
@@ -77,14 +82,53 @@ class _TrackingPageState extends State<TrackingPage> {
   }
 
   Future<void> _refreshRequest() async {
+    await RequestService.expireStalePendingRequests();
     final request = await RequestService.getRequest(widget.requestId);
     if (!mounted || request == null) return;
     final dispatchChanged =
         request.status != _request?.status ||
         request.driverId != _request?.driverId;
     setState(() => _request = request);
+    _syncPendingTimeout(request);
     if (dispatchChanged) _watchNearbyDrivers(request);
     _animateToRelevantPin();
+  }
+
+  void _syncPendingTimeout(AmbulanceRequest? request) {
+    _pendingTimeoutTimer?.cancel();
+    _pendingTimeoutTimer = null;
+    if (widget.isDriver ||
+        request == null ||
+        request.status != RequestStatus.pending) {
+      return;
+    }
+
+    const searchWindow = Duration(minutes: 10);
+    final remaining =
+        searchWindow - DateTime.now().difference(request.createdAt);
+    if (remaining <= Duration.zero) {
+      _expirePendingRequest(request.id);
+    } else {
+      _pendingTimeoutTimer = Timer(
+        remaining,
+        () => _expirePendingRequest(request.id),
+      );
+    }
+  }
+
+  Future<void> _expirePendingRequest(String requestId) async {
+    if (_expiringPendingRequest) return;
+    _expiringPendingRequest = true;
+    try {
+      final expired = await RequestService.expirePendingRequest(requestId);
+      if (expired && mounted) {
+        setState(() => _noDriverAvailable = true);
+      }
+    } catch (error) {
+      debugPrint('Pending request expiry failed: $error');
+    } finally {
+      _expiringPendingRequest = false;
+    }
   }
 
   void _watchNearbyDrivers(AmbulanceRequest request) {
@@ -130,6 +174,7 @@ class _TrackingPageState extends State<TrackingPage> {
     _sub?.cancel();
     _nearbyDriversSub?.cancel();
     _locationRefreshTimer?.cancel();
+    _pendingTimeoutTimer?.cancel();
     _mapSearchService.dispose();
     super.dispose();
   }
@@ -317,7 +362,7 @@ class _TrackingPageState extends State<TrackingPage> {
                   : isCompleted
                   ? _CompletedBanner(req: req)
                   : isCancelled
-                  ? _CancelledBanner()
+                  ? _CancelledBanner(noDriverAvailable: _noDriverAvailable)
                   : _StatusInfo(
                       req: req,
                       isDriver: widget.isDriver,
@@ -462,7 +507,7 @@ class _StatusInfo extends StatelessWidget {
           label: 'Fare',
           value: '৳${req.estimatedFare}',
         ),
-        if (isDriver) ...[
+        if (isDriver && req.status != RequestStatus.pending) ...[
           const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
@@ -543,6 +588,9 @@ class _CompletedBanner extends StatelessWidget {
 }
 
 class _CancelledBanner extends StatelessWidget {
+  const _CancelledBanner({required this.noDriverAvailable});
+  final bool noDriverAvailable;
+
   @override
   Widget build(BuildContext context) => Column(
     mainAxisSize: MainAxisSize.min,
@@ -550,7 +598,7 @@ class _CancelledBanner extends StatelessWidget {
       const Icon(Icons.cancel_rounded, color: AppColors.warning, size: 52),
       const SizedBox(height: 12),
       Text(
-        'Trip Cancelled',
+        noDriverAvailable ? 'No Driver Available' : 'Trip Cancelled',
         style: GoogleFonts.poppins(
           fontSize: 20,
           fontWeight: FontWeight.w700,
@@ -559,7 +607,9 @@ class _CancelledBanner extends StatelessWidget {
       ),
       const SizedBox(height: 4),
       Text(
-        'The request was cancelled.',
+        noDriverAvailable
+            ? 'No driver accepted your request within 10 minutes. Please try again later.'
+            : 'The request was cancelled.',
         style: GoogleFonts.poppins(fontSize: 14, color: AppColors.textGrey),
       ),
     ],

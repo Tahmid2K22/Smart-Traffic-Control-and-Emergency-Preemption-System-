@@ -458,7 +458,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     } catch (e) {
       if (mounted) _showSnack('Failed to accept request. Try again.');
     }
-
   }
 
   Future<void> _markArrived(AmbulanceRequest request) async {
@@ -483,6 +482,10 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   Future<void> _cancelRequest(AmbulanceRequest request) async {
     try {
       await RequestService.cancelRequest(request.id, driverId: _driver.id);
+      if (!mounted) return;
+      _showSnack(
+        'Trip returned to the pending pool. Searching again for 10 minutes.',
+      );
     } catch (error) {
       if (mounted) _showSnack('Could not cancel trip: $error');
     }

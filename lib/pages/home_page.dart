@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -78,7 +78,9 @@ class _HomePageState extends State<HomePage> {
           .doc(user.uid)
           .get();
       final data = profile.data();
-      final profileName = data?['name']?.toString().trim() ?? '';
+      final profileName = data?['name']?.toString().trim().isNotEmpty == true
+          ? data!['name'].toString().trim()
+          : data?['fullName']?.toString().trim() ?? '';
       if (profileName.isNotEmpty) name = profileName;
       final unread = await FirebaseFirestore.instance
           .collection('notifications')

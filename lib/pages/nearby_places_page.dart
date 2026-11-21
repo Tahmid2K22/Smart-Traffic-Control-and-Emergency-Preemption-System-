@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../constants/colors.dart';
 import '../services/deep_link_navigation_service.dart';
+import '../services/hospital_service.dart';
 import '../services/places_api_service.dart';
 
 enum NearbyPlaceType { hospitals, pharmacies }
@@ -125,8 +126,39 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
         place.location.latitude,
         place.location.longitude,
       );
+      var combined = fetched.toList();
+
+      if (widget.type == NearbyPlaceType.hospitals) {
+        try {
+          final hospitals = await HospitalService().approvedHospitalsOnce();
+          for (final hospital in hospitals) {
+            if (hospital.lat == 0 || hospital.lon == 0) continue;
+            combined.removeWhere(
+              (place) =>
+                  place.name.toLowerCase().trim() ==
+                  hospital.name.toLowerCase().trim(),
+            );
+            combined.add(
+              NearbyPlaceResult(
+                id: 'registered-${hospital.id}',
+                name: hospital.name,
+                address: hospital.address.isNotEmpty
+                    ? hospital.address
+                    : hospital.city,
+                location: LatLng(hospital.lat, hospital.lon),
+                isOpen: null,
+                types: const ['hospital'],
+                phone: hospital.phone.isNotEmpty ? hospital.phone : null,
+              ),
+            );
+          }
+        } catch (_) {
+          // API/OSM results remain available if Firestore is unavailable.
+        }
+      }
+
       final nearby =
-          fetched
+          combined
               .where(
                 (place) =>
                     distance(place) <= PlacesApiService.nearbyRadiusMeters,
@@ -213,6 +245,70 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
     }
   }
 
+  Future<void> _showPlaceDetails(NearbyPlaceResult place) async {
+    final distanceMeters = _userLocation == null
+        ? null
+        : Geolocator.distanceBetween(
+            _userLocation!.latitude,
+            _userLocation!.longitude,
+            place.location.latitude,
+            place.location.longitude,
+          );
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                place.name,
+                style: GoogleFonts.poppins(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark,
+                ),
+              ),
+              const SizedBox(height: 10),
+              _DetailRow(icon: Icons.location_on_outlined, text: place.address),
+              if (place.phone?.trim().isNotEmpty == true)
+                _DetailRow(icon: Icons.phone_outlined, text: place.phone!),
+              if (distanceMeters != null)
+                _DetailRow(
+                  icon: Icons.near_me_outlined,
+                  text: '${(distanceMeters / 1000).toStringAsFixed(1)} km away',
+                ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _callPlace(place.phone),
+                      icon: const Icon(Icons.call_rounded),
+                      label: const Text('Call'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => _openDirections(place),
+                      icon: const Icon(Icons.directions_rounded),
+                      label: const Text('Directions'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _scanButton() => OutlinedButton.icon(
     onPressed: _loading ? null : _scan,
     icon: const Icon(Icons.refresh_rounded, size: 18),
@@ -292,8 +388,8 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
                 infoWindow: InfoWindow(
                   title: place.name,
                   snippet: place.address,
-                  onTap: () => _openDirections(place),
                 ),
+                onTap: () => _showPlaceDetails(place),
                 icon: BitmapDescriptor.defaultMarkerWithHue(
                   widget.type == NearbyPlaceType.hospitals
                       ? BitmapDescriptor.hueRed
@@ -385,6 +481,7 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
                         onCall: place.phone?.trim().isNotEmpty == true
                             ? () => _callPlace(place.phone)
                             : null,
+                        onDetails: () => _showPlaceDetails(place),
                       ),
                     ),
                   ),
@@ -464,136 +561,167 @@ class _PlaceCard extends StatelessWidget {
     required this.distanceKm,
     required this.onDirections,
     required this.onCall,
+    required this.onDetails,
   });
 
   final NearbyPlaceResult place;
   final double distanceKm;
   final VoidCallback onDirections;
   final VoidCallback? onCall;
+  final VoidCallback onDetails;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: AppColors.white,
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: AppColors.cardBorder),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.04),
-          blurRadius: 10,
-          offset: const Offset(0, 3),
-        ),
-      ],
-    ),
-    child: Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppColors.primaryLight,
-            borderRadius: BorderRadius.circular(14),
+  Widget build(BuildContext context) => InkWell(
+    onTap: onDetails,
+    borderRadius: BorderRadius.circular(16),
+    child: Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.cardBorder),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
-          child: Icon(
-            place.types.contains('hospital')
-                ? Icons.local_hospital_rounded
-                : Icons.medication_rounded,
-            color: AppColors.primary,
-            size: 26,
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.primaryLight,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(
+              place.types.contains('hospital')
+                  ? Icons.local_hospital_rounded
+                  : Icons.medication_rounded,
+              color: AppColors.primary,
+              size: 26,
+            ),
           ),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                place.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  color: AppColors.textDark,
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  place.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppColors.textDark,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                place.address,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: AppColors.textGrey,
+                const SizedBox(height: 4),
+                Text(
+                  place.address,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: AppColors.textGrey,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '${distanceKm.toStringAsFixed(1)} km away',
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.primary,
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '${distanceKm.toStringAsFixed(1)} km away',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary,
+                        ),
                       ),
                     ),
-                  ),
-                  _StatusChip(isOpen: place.isOpen),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 6),
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              tooltip: 'Directions',
-              onPressed: onDirections,
-              icon: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(10),
+                    _StatusChip(isOpen: place.isOpen),
+                  ],
                 ),
-                child: const Icon(
-                  Icons.directions_rounded,
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ),
+              ],
             ),
-            if (onCall != null)
+          ),
+          const SizedBox(width: 6),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
               IconButton(
-                tooltip: 'Call facility',
-                onPressed: onCall,
+                tooltip: 'Directions',
+                onPressed: onDirections,
                 icon: Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: AppColors.successLight,
+                    color: AppColors.primary,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Icon(
-                    Icons.call_rounded,
-                    color: AppColors.success,
+                    Icons.directions_rounded,
+                    color: Colors.white,
                     size: 18,
                   ),
                 ),
               ),
-          ],
+              if (onCall != null)
+                IconButton(
+                  tooltip: 'Call facility',
+                  onPressed: onCall,
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.successLight,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.call_rounded,
+                      color: AppColors.success,
+                      size: 18,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: AppColors.primary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: GoogleFonts.poppins(fontSize: 13, color: AppColors.textGrey),
+          ),
         ),
       ],
     ),
