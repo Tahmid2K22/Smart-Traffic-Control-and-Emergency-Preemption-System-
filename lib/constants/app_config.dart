@@ -1,11 +1,7 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-/// Central accessor for all secret keys loaded from the .env file.
-///
-/// Usage:
-///   1. Call `await AppConfig.load();` inside `main()` before any other init.
-///   2. Access keys via `AppConfig.googleMapsApiKey`, etc.
-///   3. NEVER hard-code keys in Dart source files — always read from here.
+ /// Call `await AppConfig.load();` inside `main()` before any other init.
+
 class AppConfig {
   AppConfig._();
 

@@ -1,8 +1,6 @@
 /// A user profile stored in the Supabase `users` table.
 ///
-/// Firebase Auth owns authentication (email/password, session, uid). Every
-/// other piece of account data — name, phone, role, approval flags, officer
-/// assignment, driver documents and FCM tokens — lives here and in Supabase.
+/// Firebase Auth owns authentication (email/password, session, uid)
 class UserProfile {
   const UserProfile({
     required this.uid,
@@ -38,7 +36,7 @@ class UserProfile {
   final String? city;
   final String? address;
 
-  /// One of `patient`, `user`, `driver`, `traffic_police`, `admin`, `hospital`.
+  /// other
   final String role;
 
   final bool isApproved;

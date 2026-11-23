@@ -8,6 +8,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../models/intersection_point.dart';
+import '../services/intersection_service.dart';
 import '../services/push_notification_service.dart';
 import '../services/traffic_rtdb_service.dart';
 import '../services/traffic_service.dart';
@@ -34,9 +35,12 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   static final _yellowCtrl = TextEditingController(text: '3');
   static final _redCtrl = TextEditingController(text: '2');
 
-  late IntersectionPoint _selected;
-  late TrafficRtdbService _service;
+  final _intersectionService = IntersectionService();
+  IntersectionPoint? _selected;
+  TrafficRtdbService? _service;
   StreamSubscription<TrafficRtdbState>? _sub;
+  StreamSubscription<List<IntersectionPoint>>? _intersectionsSub;
+  List<IntersectionPoint> _intersections = const [];
   TrafficRtdbState _state = const TrafficRtdbState(
     mode: 'unknown',
     phase: 'unknown',
@@ -51,28 +55,45 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   @override
   void initState() {
     super.initState();
-    _selected = _resolveAssigned();
-    _service = TrafficRtdbService(intersectionId: _selected.id);
-    _subscribe();
+    _selected = _resolveAssigned(null);
+    if (_selected != null) {
+      _service = TrafficRtdbService(intersectionId: _selected!.id);
+      _subscribe();
+    }
+    _intersectionsSub = _intersectionService.watchIntersections().listen((list) {
+      if (!mounted) return;
+      setState(() => _intersections = list);
+      if (_selected == null) {
+        final resolved = _resolveAssigned(list);
+        if (resolved != null) {
+          setState(() {
+            _selected = resolved;
+            _service = TrafficRtdbService(intersectionId: resolved.id);
+          });
+          _subscribe();
+        }
+      }
+    });
     // Register the officer's FCM token so escape requests reach them as
     // push notifications (token saved on users/{uid}.fcmTokens).
     unawaited(_pushService.registerForCurrentUser());
   }
 
-  IntersectionPoint _resolveAssigned() {
+  IntersectionPoint? _resolveAssigned(List<IntersectionPoint>? list) {
     final name = widget.assignedIntersection?.trim().toLowerCase();
+    final candidates = list ?? _intersections;
     if (name != null && name.isNotEmpty) {
-      for (final point in IntersectionPoint.khulnaIntersections) {
+      for (final point in candidates) {
         if (point.name.toLowerCase() == name || point.id == name) return point;
       }
     }
-    // Default: the intersection with the live controller.
-    return IntersectionPoint.khulna;
+    // No matching server intersection and no assignment: show no data.
+    return null;
   }
 
   void _subscribe() {
     unawaited(_sub?.cancel());
-    _sub = _service.statusStream.listen((state) {
+    _sub = _service!.statusStream.listen((state) {
       if (mounted) setState(() => _state = state);
     }, onError: (Object error) {
       if (mounted) _notice('Status stream error: $error');
@@ -80,7 +101,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   }
 
   Future<void> _chooseIntersection(IntersectionPoint point) async {
-    if (point.id == _selected.id) return;
+    if (_selected != null && point.id == _selected!.id) return;
     setState(() {
       _selected = point;
       _state = const TrafficRtdbState(
@@ -98,6 +119,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   @override
   void dispose() {
     unawaited(_sub?.cancel());
+    unawaited(_intersectionsSub?.cancel());
     _pushService.dispose();
     super.dispose();
   }
@@ -125,7 +147,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
     final red = _duration(_redCtrl, 'Red time');
     if (green == null || yellow == null || red == null) return;
     await _send(
-      () => _service.auto(
+      () => _service!.auto(
         greenSec: green,
         yellowSec: yellow,
         allRedSec: red,
@@ -155,7 +177,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
     setState(() => _releasing = true);
     try {
       await TrafficService().releaseEscape(
-        intersectionId: _service.intersectionId,
+        intersectionId: _service!.intersectionId,
         source: EscapeReleaseSource.police,
       );
       _notice('Ambulance priority released — back to AUTO');
@@ -180,7 +202,35 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
           ),
         ],
       ),
-      body: ListView(
+      body: _selected == null
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.location_off_rounded,
+                        size: 64, color: Colors.grey),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No intersection assigned',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Ask an admin to assign an intersection to your account. '
+                      'Only server-registered intersections are shown.',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.poppins(color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // Intersection picker (assigned intersection is the default).
@@ -192,7 +242,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
               prefixIcon: Icon(Icons.location_on_outlined),
             ),
             items: [
-              for (final point in IntersectionPoint.khulnaIntersections)
+              for (final point in _intersections)
                 DropdownMenuItem(
                   value: point,
                   child: Text('${point.name} · ${point.city}'),
@@ -210,7 +260,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
               child: FlutterMap(
                 options: MapOptions(
                   initialCenter:
-                      LatLng(_selected.latitude, _selected.longitude),
+                      LatLng(_selected!.latitude, _selected!.longitude),
                   initialZoom: 16,
                 ),
                 children: [
@@ -223,7 +273,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
                     markers: [
                       Marker(
                         point:
-                            LatLng(_selected.latitude, _selected.longitude),
+                            LatLng(_selected!.latitude, _selected!.longitude),
                         width: 40,
                         height: 40,
                         child: const Icon(Icons.traffic_rounded,
@@ -274,7 +324,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
             ),
             value: online && _state.mode == 'auto',
             onChanged: online && !_sending && _state.priority != 'ambulance'
-                ? (auto) => _send(() => _service.setMode(auto),
+                ? (auto) => _send(() => _service!.setMode(auto),
                     auto ? 'AUTO' : 'MANUAL')
                 : null,
           ),
@@ -345,7 +395,7 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
             onSet: _sending || !online || _state.priority == 'ambulance'
                 ? null
                 : (direction, color) => _send(
-                    () => _service.setColor(direction, color),
+                    () => _service!.setColor(direction, color),
                     '$color $direction',
                   ),
           ),

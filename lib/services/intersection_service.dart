@@ -30,34 +30,6 @@ class IntersectionService {
     return uid;
   }
 
-  Future<void> seedKhulnaIntersections() async {
-    final uid = await _requireAdmin();
-    for (final point in IntersectionPoint.khulnaIntersections) {
-      final ref = _firestore.collection('intersections').doc(point.id);
-      await _firestore.runTransaction((transaction) async {
-        final existing = await transaction.get(ref);
-        if (!existing.exists) {
-          transaction.set(ref, {
-            ...point.toMap(),
-            'fullPlusCode': '7MJF${point.plusCode}',
-            'location': GeoPoint(point.latitude, point.longitude),
-            'createdBy': uid,
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-          return;
-        }
-        final patch = _layoutPatch(point.id, existing.data()!);
-        if (patch.isNotEmpty) {
-          transaction.set(ref, {
-            ...patch,
-            'updatedBy': uid,
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-        }
-      });
-    }
-  }
 
   Map<String, dynamic> _layoutPatch(String id, Map<String, dynamic> data) {
     final defaults = IntersectionPoint(

@@ -17,7 +17,6 @@ class UserService {
   static const String _table = SupabaseTables.users;
   static const List<String> _key = ['firebase_uid'];
 
-  /// Reads one profile, or `null` when it does not exist yet.
   Future<UserProfile?> fetch(String firebaseUid) async {
     if (!supabaseReady || firebaseUid.isEmpty) return null;
     final row = await sb

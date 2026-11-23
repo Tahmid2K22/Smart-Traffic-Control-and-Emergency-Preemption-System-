@@ -5,7 +5,14 @@ import 'package:e_ambulance/services/overpass_signal_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  const point = IntersectionPoint.khulna;
+  const point = IntersectionPoint(
+    id: 'khulna_durbar_bangla',
+    name: 'Durbar Bangla, KUET, Khulna',
+    city: 'Khulna',
+    latitude: 22.8987875,
+    longitude: 89.502734375,
+    plusCode: 'VGX3+G39',
+  );
   double latitudeAtDistance(double meters) =>
       point.latitude + meters / 6371000 * 180 / math.pi;
 

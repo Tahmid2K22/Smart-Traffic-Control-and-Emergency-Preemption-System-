@@ -18,40 +18,18 @@ class _IntersectionsManagementPageState
   final _searchController = TextEditingController();
   final _updatingIds = <String>{};
   late Stream<List<IntersectionPoint>> _intersections;
-  bool _seeding = false;
-  String? _seedError;
   String _query = '';
 
   @override
   void initState() {
     super.initState();
     _intersections = _service.watchIntersections();
-    _seed();
   }
 
   @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
-  }
-
-  Future<void> _seed() async {
-    if (_seeding) return;
-    setState(() {
-      _seeding = true;
-      _seedError = null;
-    });
-    try {
-      await _service.seedKhulnaIntersections();
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _seedError = 'Could not initialize the Khulna intersections: $error';
-        });
-      }
-    } finally {
-      if (mounted) setState(() => _seeding = false);
-    }
   }
 
   void _showFeedback(String message, {bool isError = false}) {
@@ -117,31 +95,6 @@ class _IntersectionsManagementPageState
       body: SafeArea(
         child: Column(
           children: [
-            if (_seeding) ...[
-              const LinearProgressIndicator(),
-              const Padding(
-                padding: EdgeInsets.all(8),
-                child: Text('Initializing the Khulna intersections…'),
-              ),
-            ],
-            if (_seedError != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _seedError!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                    TextButton.icon(
-                      onPressed: _seeding ? null : _seed,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Retry initialization'),
-                    ),
-                  ],
-                ),
-              ),
             Padding(
               padding: const EdgeInsets.all(16),
               child: TextField(

@@ -9,6 +9,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../constants/colors.dart';
 import '../../models/intersection_point.dart';
+import '../../services/intersection_service.dart';
 import '../../models/message_model.dart';
 import '../../models/request_model.dart';
 import '../../services/request_service.dart';
@@ -66,6 +67,8 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   double? _preemptedAlong; // junction offset on the route when triggered
   TrafficRtdbService? _preemptService;
   final _routeService = RouteService();
+  List<IntersectionPoint> _intersections = const [];
+  final _intersectionService = IntersectionService();
   List<LatLng>? _routePoints;
   String? _routeRequestId;
 
@@ -78,6 +81,10 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   void initState() {
     super.initState();
     _driver = widget.driver;
+    // Load intersections from the server (no hardcoded fallback).
+    _intersectionService.watchIntersections().first.then((list) {
+      if (mounted) setState(() => _intersections = list);
+    });
     if (_driver.isOnline) {
       _startListening();
       _startLocationUpdates();
@@ -322,7 +329,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     IntersectionPoint? target;
     var bestRemaining = double.infinity;
     var bestAlong = 0.0;
-    for (final point in IntersectionPoint.khulnaIntersections) {
+    for (final point in _intersections) {
       final at = RouteService.locate(
         route: route,
         position: LatLng(point.latitude, point.longitude),
@@ -366,7 +373,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   Future<void> _checkPreemptByRadius(Position pos) async {
     IntersectionPoint? nearest;
     var best = double.infinity;
-    for (final point in IntersectionPoint.khulnaIntersections) {
+    for (final point in _intersections) {
       final d = point.distanceFrom(pos.latitude, pos.longitude);
       if (d < best) {
         best = d;

@@ -35,50 +35,8 @@ class IntersectionPoint {
 
   static const emergencyRadiusMeters = 500.0;
 
-  /// Escape requests target the light itself, so they are allowed from
-  /// farther away than the automatic along-route preemption trigger
-  /// ([emergencyRadiusMeters]). Any intersection in this range can be
-  /// chosen — no assigned traffic officer is required.
   static const escapeRequestRadiusMeters = 1000.0;
 
-  // VGX3+G39 recovered relative to Khulna: 7MJFVGX3+G39 (Durbar Bangla, KUET).
-  static const khulna = IntersectionPoint(
-    id: 'khulna_durbar_bangla',
-    name: 'Durbar Bangla, KUET, Khulna',
-    city: 'Khulna',
-    latitude: 22.8987875,
-    longitude: 89.502734375,
-    plusCode: 'VGX3+G39',
-  );
-
-  static const moylapota = IntersectionPoint(
-    id: 'khulna_moylapota_mor',
-    name: 'Moylapota Mor',
-    city: 'Khulna',
-    latitude: 22.8351875,
-    longitude: 89.5381875,
-    plusCode: 'RGPQ+37',
-  );
-
-  static const royal = IntersectionPoint(
-    id: 'khulna_royal_mor',
-    name: 'Royal Mor',
-    city: 'Khulna',
-    latitude: 22.8102625,
-    longitude: 89.562265625,
-    plusCode: 'RH66+4W2',
-  );
-
-  static const shibbari = IntersectionPoint(
-    id: 'khulna_shibbari_mor',
-    name: 'Shibbari Mor',
-    city: 'Khulna',
-    latitude: 22.8221875,
-    longitude: 89.5526875,
-    plusCode: 'RHC3+V3',
-  );
-
-  static const khulnaIntersections = [khulna, moylapota, royal, shibbari];
   static const directions = ['north', 'east', 'south', 'west'];
 
   final String id;
