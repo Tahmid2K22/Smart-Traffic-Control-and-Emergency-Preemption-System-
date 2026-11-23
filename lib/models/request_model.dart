@@ -150,39 +150,6 @@ class AmbulanceRequest {
     'user_name':            userName,
     'user_phone':           userPhone,
   };
-
-  AmbulanceRequest copyWith({
-    RequestStatus? status,
-    String? driverId,
-    String? driverName,
-    String? driverPhone,
-    double? driverLat,
-    double? driverLng,
-  }) =>
-      AmbulanceRequest(
-        id: id,
-        userFirebaseUid: userFirebaseUid,
-        driverId: driverId ?? this.driverId,
-        status: status ?? this.status,
-        ambulanceType: ambulanceType,
-        pickupLat: pickupLat,
-        pickupLng: pickupLng,
-        pickupAddress: pickupAddress,
-        destinationLat: destinationLat,
-        destinationLng: destinationLng,
-        destinationAddress: destinationAddress,
-        estimatedFare: estimatedFare,
-        distanceKm: distanceKm,
-        userName: userName,
-        userPhone: userPhone,
-        createdAt: createdAt,
-        acceptedAt: acceptedAt,
-        completedAt: completedAt,
-        driverName: driverName ?? this.driverName,
-        driverPhone: driverPhone ?? this.driverPhone,
-        driverLat: driverLat ?? this.driverLat,
-        driverLng: driverLng ?? this.driverLng,
-      );
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

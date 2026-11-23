@@ -120,12 +120,6 @@ class TrafficRtdbService {
     return null;
   }
 
-  Future<void> setGreen(String direction) => _send({
-        'action': 'green',
-        'direction': direction,
-        'id': ServerValue.timestamp,
-      });
-
   /// Police preemption: force one direction to a specific colour
   /// ('green', 'yellow' or 'red'). Safety rules live in the firmware.
   Future<void> setColor(String direction, String color) => _send({

@@ -64,20 +64,18 @@
 #include <time.h>
 #include <ArduinoJson.h>
 
-// ── User config ─────────────────────────────────────────────────────────────
-#define WIFI_SSID        "Redmi 12"   // your Wi-Fi name
-#define WIFI_PASSWORD    "1theke80"   // your Wi-Fi password
+
+#define WIFI_SSID        "Redmi 12"  
+#define WIFI_PASSWORD    "1theke80"
 #define DB_URL           "https://e-ambulance-system-001-default-rtdb.firebaseio.com"
-#define DB_SECRET        ""          // legacy database secret; empty = open bench rules
+#define DB_SECRET        ""          
 #define INTERSECTION_ID  "khulna_durbar_bangla"
 
 #define STATUS_INTERVAL_MS  5000
 
-// ── Network policy — the lights never wait on the network ───────────────────
+// Network policy — the lights never wait on the network 
 // Wi-Fi gets a short, BOUNDED window at boot; if it is not up the AUTO cycle
-// starts anyway and Wi-Fi is retried from loop(). Every socket operation is
-// time-bounded too, so a board that is associated but has no internet (dead
-// router, captive portal) cannot freeze the lights inside connect()/TLS.
+
 #define WIFI_BOOT_WAIT_MS      8000UL  // max boot wait before AUTO runs alone
 #define NET_CONNECT_TIMEOUT_MS 2000    // TCP connect budget (ms)
 #define NET_HANDSHAKE_SEC      4       // TLS handshake budget (SECONDS)

@@ -25,8 +25,6 @@ class _RegisterPageState extends State<RegisterPage> {
   final _confirmPasswordController = TextEditingController();
   final _licenseController = TextEditingController();
   final _vehicleNumberController = TextEditingController();
-  final _policeIdController = TextEditingController();
-  final _intersectionController = TextEditingController();
   final _imagePicker = ImagePicker();
   final _authService = AuthService();
 
@@ -164,8 +162,6 @@ class _RegisterPageState extends State<RegisterPage> {
     _confirmPasswordController.dispose();
     _licenseController.dispose();
     _vehicleNumberController.dispose();
-    _policeIdController.dispose();
-    _intersectionController.dispose();
     super.dispose();
   }
 

@@ -1,14 +1,16 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:async';
+
+import 'package:flutter/material.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 
 import 'firebase_options.dart';
 
 import 'constants/colors.dart';
+import 'models/user_profile.dart';
 import 'pages/home_page.dart';
 import 'pages/activity_page.dart';
 import 'pages/profile_page.dart';
@@ -20,22 +22,17 @@ import 'pages/traffic/pending_verification_screen.dart';
 import 'pages/simple_traffic_page.dart';
 import 'models/request_model.dart';
 import 'services/request_service.dart';
+import 'services/user_service.dart';
 import 'constants/app_config.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load .env — never crash if file is missing
+  // Load .env
   try {
     await AppConfig.load();
   } catch (_) {}
 
-  // Firebase is required. Initialise defensively: on Android/iOS the native
-  // default app already exists (from google-services.json /
-  // GoogleService-Info.plist) before Dart runs, and passing options that
-  // differ from it makes the plugin throw `[core/duplicate-app]`. That would
-  // abort main() before runApp(), which is exactly what produces a blank
-  // white screen with no visible error.
   try {
     await _initializeFirebase();
   } catch (error) {
@@ -43,21 +40,18 @@ void main() async {
     return;
   }
 
-  // Supabase is optional — driver features degrade if keys are not set
+
   try {
     final url = AppConfig.supabaseUrl;
     final key = AppConfig.supabaseAnonKey;
-    // ignore: deprecated_member_use
-    await Supabase.initialize(url: url, anonKey: key);
+    await Supabase.initialize(url: url, anonKey: key); // ignore: deprecated_member_use
   } catch (_) {
-    // No Supabase keys yet — app still runs for regular users
+    // No Supabase keys yet , app still runs for regular users
   }
 
   runApp(const AmbulanceApp());
 }
 
-/// Initialises Firebase without ever leaving the app half-started.
-///
 /// If the native default app is already registered with different options
 /// (the usual reason for `[core/duplicate-app]`), the existing app is reused —
 /// Realtime Database calls pass their URL explicitly anyway.
@@ -169,61 +163,123 @@ class AuthGate extends StatelessWidget {
             ),
           );
         }
-        if (!snapshot.hasData) {
+        final user = snapshot.data;
+        if (user == null) {
           return const DashboardPage(key: ValueKey('guest'), isGuest: true);
         }
-        // Role-based routing: check Firestore role
-        return StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('users')
-              .doc(snapshot.data!.uid)
-              .snapshots(),
-          builder: (context, roleSnap) {
-            if (!roleSnap.hasData) {
-              return const Scaffold(
-                body: Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                ),
-              );
-            }
-            final data = (roleSnap.data?.data() as Map<String, dynamic>?) ?? {};
-            final role = data['role'] as String? ?? 'user';
-
-            if (role == 'admin') {
-              return const AdminDashboardPage();
-            }
-            if (role == 'traffic_police') {
-              final isVerified =
-                  data['isVerified'] == true &&
-                  data['verificationStatus'] == 'APPROVED';
-              if (!isVerified) {
-                return PendingVerificationScreen(
-                  status: data['verificationStatus'] as String? ?? 'PENDING',
-                );
-              }
-              return SimpleTrafficPage(
-                assignedIntersection: data['assignedIntersection']?.toString(),
-              );
-            }
-            if (role == 'driver') {
-              return _DriverGate(
-                firebaseUid: snapshot.data!.uid,
-                firestoreData: data,
-              );
-            }
-            if (role == 'hospital') {
-              if (data['isApproved'] != true) {
-                return _HospitalPendingScreen(
-                  hospitalName: data['name'] as String? ?? 'Hospital',
-                );
-              }
-              return HospitalDashboardPage(profile: data);
-            }
-            return DashboardPage(key: ValueKey(snapshot.data!.uid));
-          },
+        return _ProfileGate(
+          key: ValueKey(user.uid),
+          uid: user.uid,
+          fallbackName: user.displayName,
+          fallbackEmail: user.email,
         );
       },
     );
+  }
+}
+
+/// Loads the signed-in user's profile from Supabase, then routes by role.
+/// The profile stream keeps the screen in sync when an admin changes the role
+/// or approves the account, without requiring a restart.
+class _ProfileGate extends StatefulWidget {
+  const _ProfileGate({
+    super.key,
+    required this.uid,
+    this.fallbackName,
+    this.fallbackEmail,
+  });
+
+  final String uid;
+  final String? fallbackName;
+  final String? fallbackEmail;
+
+  @override
+  State<_ProfileGate> createState() => _ProfileGateState();
+}
+
+class _ProfileGateState extends State<_ProfileGate> {
+  UserProfile? _profile;
+  bool _loading = true;
+  StreamSubscription<UserProfile?>? _watch;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    UserProfile? profile;
+    try {
+      profile = await UserService.instance.fetchOrMigrate(
+        widget.uid,
+        fallbackName: widget.fallbackName,
+        fallbackEmail: widget.fallbackEmail,
+      );
+    } catch (error) {
+      debugPrint('Profile load failed: $error');
+    }
+    if (!mounted) return;
+    setState(() {
+      _profile = profile;
+      _loading = false;
+    });
+
+    _watch = UserService.instance.watchProfile(widget.uid).listen(
+      (updated) {
+        if (!mounted || updated == null) return;
+        setState(() => _profile = updated);
+      },
+      onError: (Object error) {
+        debugPrint('Profile stream error: $error');
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _watch?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(color: AppColors.primary),
+        ),
+      );
+    }
+
+    final profile = _profile;
+    // No Supabase profile (offline / not configured): keep the app usable as a
+    // regular user instead of blocking the whole session.
+    if (profile == null) {
+      return DashboardPage(key: ValueKey('profile-${widget.uid}'));
+    }
+
+    if (profile.isAdmin) {
+      return const AdminDashboardPage();
+    }
+    if (profile.isTrafficOfficer) {
+      if (!profile.isVerifiedOfficer) {
+        return PendingVerificationScreen(status: profile.verificationStatus);
+      }
+      return SimpleTrafficPage(
+        assignedIntersection: profile.assignedIntersection,
+      );
+    }
+    if (profile.isDriver) {
+      return _DriverGate(profile: profile);
+    }
+    if (profile.isHospital) {
+      if (!profile.isApproved) {
+        return _HospitalPendingScreen(hospitalName: profile.displayName);
+      }
+      return HospitalDashboardPage(profile: profile.toData());
+    }
+    return DashboardPage(key: ValueKey(profile.uid));
   }
 }
 
@@ -275,12 +331,11 @@ class _HospitalPendingScreen extends StatelessWidget {
   }
 }
 
-/// Loads or creates the driver's Supabase profile, checks approval, then shows
-/// [DriverDashboardPage] or a pending-approval screen.
+/// Loads or creates the driver's Supabase dispatch profile, checks approval,
+/// then shows [DriverDashboardPage] or a pending-approval screen.
 class _DriverGate extends StatefulWidget {
-  const _DriverGate({required this.firebaseUid, required this.firestoreData});
-  final String firebaseUid;
-  final Map<String, dynamic> firestoreData;
+  const _DriverGate({required this.profile});
+  final UserProfile profile;
 
   @override
   State<_DriverGate> createState() => _DriverGateState();
@@ -297,23 +352,22 @@ class _DriverGateState extends State<_DriverGate> {
   }
 
   Future<void> _loadDriver() async {
-    final data = widget.firestoreData;
-    final isApprovedInFirestore = data['isApproved'] == true;
+    final profile = widget.profile;
 
-    // Upsert driver profile, including approval status from Firestore
+    // Upsert driver profile, including the admin-set approval flag.
     await RequestService.upsertDriverProfile(
-      firebaseUid: widget.firebaseUid,
-      name: data['name'] as String? ?? 'Driver',
-      phone: data['phone'] as String? ?? '',
-      vehicleType: data['vehicleType'] as String? ?? 'Basic',
-      vehicleNumber: data['vehicleNumber'] as String? ?? '',
-      isApproved: isApprovedInFirestore,
+      firebaseUid: profile.uid,
+      name: profile.name.isEmpty ? 'Driver' : profile.name,
+      phone: profile.phone,
+      vehicleType: profile.vehicleType ?? 'Basic',
+      vehicleNumber: profile.vehicleNumber ?? '',
+      isApproved: profile.isApproved,
     );
 
-    final profile = await RequestService.getMyDriverProfile();
+    final driver = await RequestService.getMyDriverProfile();
     if (mounted) {
       setState(() {
-        _profile = profile;
+        _profile = driver;
         _loading = false;
       });
     }
@@ -332,7 +386,7 @@ class _DriverGateState extends State<_DriverGate> {
     // Not yet approved — show a holding screen
     if (_profile == null || !_profile!.isApproved) {
       return _PendingApprovalScreen(
-        driverName: widget.firestoreData['name'] as String? ?? 'Driver',
+        driverName: widget.profile.displayName,
       );
     }
 

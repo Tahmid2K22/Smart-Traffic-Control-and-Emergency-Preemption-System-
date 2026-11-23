@@ -181,17 +181,23 @@ export const notifyEmergencyEscape = onDocumentCreated(
     if (typeof alert.officerId === 'string' && alert.officerId !== '') return;
     if (!intersectionId && !intersectionName) return;
 
-    const db = getFirestore();
-    const officers = await db
-      .collection('users')
-      .where('role', '==', 'traffic_police')
-      .where('isVerified', '==', true)
-      .where('isActive', '==', true)
-      .get();
-
+    const supabaseUrl = process.env.SUPABASE_URL ?? '';
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
+    let officers: Array<{ assignedIntersectionId?: unknown; assignedIntersection?: unknown; fcmTokens?: unknown }> = [];
+    if (supabaseUrl && serviceKey) {
+      try {
+        const res = await fetch(`${supabaseUrl}/rest/v1/users?select=assigned_intersection_id,assigned_intersection,fcm_tokens&role=eq.traffic_police&is_verified=eq.true&is_active=eq.true`, {
+          headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+        });
+        if (res.ok) {
+          officers = await res.json();
+        }
+      } catch (error) {
+        console.error('Supabase officer lookup failed:', error);
+      }
+    }
     const tokens: string[] = [];
-    officers.forEach((doc) => {
-      const data = doc.data() as Record<string, unknown>;
+    for (const data of officers) {
       const assignedId =
         typeof data.assignedIntersectionId === 'string'
           ? data.assignedIntersectionId
@@ -205,9 +211,9 @@ export const notifyEmergencyEscape = onDocumentCreated(
         (intersectionName !== '' &&
           assignedName !== '' &&
           assignedName === intersectionName.toLowerCase());
-      if (!matches) return;
+      if (!matches) continue;
       tokens.push(...tokenMapKeys(data.fcmTokens));
-    });
+    }
     if (tokens.length === 0) return;
 
     const driverName =
@@ -260,7 +266,7 @@ export const notifyEmergencyEscape = onDocumentCreated(
 
     // Stamp the primary record (this trigger's doc IS the primary) so the
     // driver / dashboards can see that pushes were attempted.
-    await db.collection('emergency_alerts').doc(event.params.alertId).update({
+    await getFirestore().collection('emergency_alerts').doc(event.params.alertId).update({
       pushSentAt: FieldValue.serverTimestamp(),
       pushRecipientCount: tokens.length,
     });

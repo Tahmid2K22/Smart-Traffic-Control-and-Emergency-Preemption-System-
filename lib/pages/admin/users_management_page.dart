@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:velocity_x/velocity_x.dart';
 
 import '../../constants/colors.dart';
+import '../../models/user_profile.dart';
 import '../../services/admin_service.dart';
 
 class UsersManagementPage extends StatefulWidget {
@@ -65,7 +66,7 @@ class _UsersManagementPageState extends State<UsersManagementPage>
           ),
         ),
         Expanded(
-          child: StreamBuilder(
+          child: StreamBuilder<List<UserProfile>>(
             stream: _adminService.allUsersStream(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -74,27 +75,24 @@ class _UsersManagementPageState extends State<UsersManagementPage>
               if (snapshot.hasError) {
                 return Center(child: Text('Error: ${snapshot.error}'));
               }
-              var docs = snapshot.data?.docs ?? [];
+              var users = snapshot.data ?? [];
               if (_tabs.index == 1) {
-                docs = docs
-                    .where((doc) =>
-                        (doc.data() as Map<String, dynamic>)['role'] ==
-                        'traffic_police')
+                users = users
+                    .where((u) => u.role == 'traffic_police')
                     .toList();
               }
-              if (docs.isEmpty) {
+              if (users.isEmpty) {
                 return _buildEmpty();
               }
               return ListView.separated(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                itemCount: docs.length,
+                itemCount: users.length,
                 separatorBuilder: (context, index) => 12.heightBox,
                 itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final data = doc.data() as Map<String, dynamic>;
+                  final user = users[index];
                   return _UserCard(
-                    uid: doc.id,
-                    data: data,
+                    uid: user.uid,
+                    data: user.toData(),
                     adminService: _adminService,
                   );
                 },

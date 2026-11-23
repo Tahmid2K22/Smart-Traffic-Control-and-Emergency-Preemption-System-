@@ -1,9 +1,10 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:velocity_x/velocity_x.dart';
 import '../../constants/colors.dart';
+import '../../models/user_profile.dart';
 import '../../services/admin_service.dart';
+import '../../services/user_service.dart';
 
 class DriversManagementPage extends StatefulWidget {
   const DriversManagementPage({super.key});
@@ -38,22 +39,8 @@ class _DriversManagementPageState extends State<DriversManagementPage>
 
   int _filterIndex = 0;
 
-  Stream<QuerySnapshot> _buildStream() {
-    final col = FirebaseFirestore.instance
-        .collection('users')
-        .where('role', isEqualTo: 'driver');
-
-    switch (_filterIndex) {
-      case 1:
-        // Pending: isApproved == false AND never explicitly rejected
-        return col.where('isApproved', isEqualTo: false).snapshots();
-      case 2:
-        return col.where('isApproved', isEqualTo: true).snapshots();
-      case 3:
-        return col.where('isApproved', isEqualTo: false).snapshots();
-      default:
-        return col.snapshots();
-    }
+  Stream<List<UserProfile>> _buildStream() {
+    return UserService.instance.watchUsers(roles: const ['driver']);
   }
 
   @override
@@ -89,7 +76,7 @@ class _DriversManagementPageState extends State<DriversManagementPage>
         ),
         // Driver list
         Expanded(
-          child: StreamBuilder<QuerySnapshot>(
+          child: StreamBuilder<List<UserProfile>>(
             stream: _buildStream(),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -98,7 +85,20 @@ class _DriversManagementPageState extends State<DriversManagementPage>
               if (snapshot.hasError) {
                 return Center(child: Text('Error: ${snapshot.error}'));
               }
-              final docs = snapshot.data?.docs ?? [];
+              var docs = snapshot.data ?? [];
+              switch (_filterIndex) {
+                case 1:
+                  docs = docs.where((u) => !u.isApproved).toList();
+                  break;
+                case 2:
+                  docs = docs.where((u) => u.isApproved).toList();
+                  break;
+                case 3:
+                  docs = docs.where((u) => !u.isApproved).toList();
+                  break;
+                default:
+                  break;
+              }
               if (docs.isEmpty) {
                 return _buildEmpty();
               }
@@ -107,11 +107,10 @@ class _DriversManagementPageState extends State<DriversManagementPage>
                 itemCount: docs.length,
                 separatorBuilder: (context, index) => 12.heightBox,
                 itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final data = doc.data() as Map<String, dynamic>;
+                  final user = docs[index];
                   return _DriverCard(
-                    uid: doc.id,
-                    data: data,
+                    uid: user.uid,
+                    data: user.toData(),
                     adminService: _adminService,
                   );
                 },

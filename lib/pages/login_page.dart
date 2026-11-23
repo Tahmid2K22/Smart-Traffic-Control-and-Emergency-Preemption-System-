@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/colors.dart';
 import '../services/auth_service.dart';
+import '../services/user_service.dart';
 import 'register_page.dart';
 import 'hospital_register_page.dart';
 
@@ -30,35 +30,28 @@ class _LoginPageState extends State<LoginPage> {
             password: _passwordController.text.trim(),
           );
 
-      // Fetch user info from Firestore and save locally
+      // Fetch the profile from Supabase and save a local copy for fast starts.
       if (userCredential.user != null) {
         try {
-          final doc = await FirebaseFirestore.instance
-              .collection('users')
-              .doc(userCredential.user!.uid)
-              .get();
-          if (doc.exists) {
-            final data = doc.data()!;
+          final profile = await UserService.instance.fetchOrMigrate(
+            userCredential.user!.uid,
+            fallbackName: userCredential.user!.displayName,
+            fallbackEmail: userCredential.user!.email,
+          );
+          if (profile != null) {
             final prefs = await SharedPreferences.getInstance();
-            final profileName =
-                data['name']?.toString().trim().isNotEmpty == true
-                ? data['name'].toString().trim()
-                : data['fullName']?.toString().trim() ??
-                      userCredential.user!.displayName ??
-                      '';
-            await prefs.setString('userName', profileName);
+            await prefs.setString('userName', profile.displayName);
             await prefs.setString(
               'userEmail',
-              data['email'] ?? userCredential.user!.email ?? '',
+              profile.email.isNotEmpty
+                  ? profile.email
+                  : userCredential.user!.email ?? '',
             );
-            await prefs.setString('userPhone', data['phone'] ?? '');
-            await prefs.setString('userCity', data['city'] ?? '');
+            await prefs.setString('userPhone', profile.phone);
+            await prefs.setString('userCity', profile.city ?? '');
 
-            // Sync driver profile to Supabase on every login
-            await AuthService.syncDriverOnLogin(
-              firebaseUid: userCredential.user!.uid,
-              firestoreData: data,
-            );
+            // Keep the dispatch row in sync on every login.
+            await AuthService.syncDriverOnLogin(profile: profile);
           }
         } catch (e) {
           debugPrint('Error fetching user data: $e');

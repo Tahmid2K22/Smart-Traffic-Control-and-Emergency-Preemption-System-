@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/intersection_point.dart';
+import 'user_service.dart';
 
 class IntersectionService {
   IntersectionService({FirebaseFirestore? firestore, FirebaseAuth? auth})
@@ -23,14 +24,11 @@ class IntersectionService {
   Future<String> _requireAdmin() async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) throw StateError('Sign in as an admin first.');
-    final profile = await _firestore.collection('users').doc(uid).get();
-    if (profile.data()?['role'] != 'admin') {
+    if (!await UserService.instance.isAdmin(uid)) {
       throw StateError('Only admins can manage intersections.');
     }
     return uid;
   }
-
-  Future<void> seedKhulnaIntersection() => seedKhulnaIntersections();
 
   Future<void> seedKhulnaIntersections() async {
     final uid = await _requireAdmin();

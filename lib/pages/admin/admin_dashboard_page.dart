@@ -7,6 +7,7 @@ import 'package:velocity_x/velocity_x.dart';
 import 'package:google_nav_bar/google_nav_bar.dart';
 
 import '../../constants/colors.dart';
+import '../../models/user_profile.dart';
 import '../../services/admin_service.dart';
 import 'drivers_management_page.dart';
 import 'users_management_page.dart';
@@ -316,15 +317,38 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
           ),
           const SizedBox(height: 20),
           // pending drivers preview
-          _buildPendingSection(
-            title: 'Pending Driver Verifications',
+          StreamBuilder<List<UserProfile>>(
             stream: _adminService.pendingDriversStream(),
-            onSeeAll: () => setState(() => _selectedTab = 1),
-            tileBuilder: (doc) => _PendingDriverTile(
-              uid: doc.id,
-              data: doc.data() as Map<String, dynamic>,
-              adminService: _adminService,
-            ),
+            builder: (context, snapshot) {
+              final users = snapshot.data ?? const [];
+              if (users.isEmpty) return const SizedBox.shrink();
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Pending Driver Verifications',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textDark,
+                    ),
+                  ),
+                  8.heightBox,
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: users.length > 3 ? 3 : users.length,
+                    separatorBuilder: (_, _) => 10.heightBox,
+                    itemBuilder: (context, index) => _PendingDriverTile(
+                      uid: users[index].uid,
+                      data: users[index].toData(),
+                      adminService: _adminService,
+                    ),
+                  ),
+                  24.heightBox,
+                ],
+              );
+            },
           ),
           24.heightBox,
           // pending hospitals preview

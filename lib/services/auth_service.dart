@@ -1,19 +1,19 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
-import 'package:image_picker/image_picker.dart';
 
+import '../models/user_profile.dart';
 import 'request_service.dart';
 import 'supabase_service.dart';
-import 'map_search_service.dart';
+import 'user_service.dart';
 
+/// Handles account creation and login synchronisation.
+///
+/// Firebase Auth owns credentials/sessions. The profile itself (name, phone,
+/// role, approval flags, driver documents) is written to and read from the
+/// Supabase `users` table through [UserService].
 class AuthService {
-  AuthService({FirebaseAuth? auth, FirebaseFirestore? firestore})
-    : _auth = auth ?? FirebaseAuth.instance,
-      _firestore = firestore ?? FirebaseFirestore.instance;
+  AuthService({FirebaseAuth? auth}) : _auth = auth ?? FirebaseAuth.instance;
 
   final FirebaseAuth _auth;
-  final FirebaseFirestore _firestore;
 
   Future<UserCredential> register({
     required String name,
@@ -26,9 +26,6 @@ class AuthService {
     String? vehicleType,
     String? vehicleNumber,
     String? licenseImagePath,
-    String? policeId,
-    String? assignedIntersection,
-    XFile? badgeImage,
   }) async {
     if (role == 'driver' &&
         (drivingLicense == null ||
@@ -36,16 +33,6 @@ class AuthService {
             vehicleNumber == null ||
             licenseImagePath == null)) {
       throw ArgumentError('All driver registration fields are required.');
-    }
-    if (role == 'traffic_police' &&
-        (policeId == null ||
-            policeId.trim().isEmpty ||
-            assignedIntersection == null ||
-            assignedIntersection.trim().isEmpty ||
-            badgeImage == null)) {
-      throw ArgumentError(
-        'All traffic police registration fields are required.',
-      );
     }
 
     final credential = await _auth.createUserWithEmailAndPassword(
@@ -62,60 +49,43 @@ class AuthService {
     }
     await user.updateDisplayName(name.trim());
 
-    // ── Write to Firebase Firestore ──────────────────────────
-    final profile = <String, dynamic>{
-      'uid': user.uid,
+    // ── User profile → Supabase ────────────────────────────────────────────
+    final row = <String, dynamic>{
+      'firebase_uid': user.uid,
       'name': name.trim(),
-      'fullName': name.trim(),
+      'full_name': name.trim(),
       'email': email.trim(),
       'phone': phone.trim(),
-      'city': city,
+      'city': city.trim().isEmpty ? null : city,
       'role': role,
-      'createdAt': FieldValue.serverTimestamp(),
+      'created_at': DateTime.now().toUtc().toIso8601String(),
     };
 
     if (role == 'driver') {
-      profile.addAll({
-        'drivingLicense': drivingLicense!.trim(),
-        'vehicleType': vehicleType,
-        'vehicleNumber': vehicleNumber!.trim(),
-        'licenseImagePath': licenseImagePath,
-        'isApproved': false,
+      row.addAll({
+        'driving_license': drivingLicense!.trim(),
+        'vehicle_type': vehicleType,
+        'vehicle_number': vehicleNumber!.trim(),
+        'license_image_path': licenseImagePath,
+        'is_approved': false,
       });
     }
 
-    if (role == 'traffic_police') {
-      final badgeRef = FirebaseStorage.instance
-          .ref()
-          .child('police_badges')
-          .child('${user.uid}.jpg');
-      await badgeRef.putData(
-        await badgeImage!.readAsBytes(),
-        SettableMetadata(contentType: 'image/jpeg'),
+    row.removeWhere((key, value) => value == null);
+
+    try {
+      await UserService.instance.upsert(row);
+    } catch (error) {
+      // Never leave a working login with no profile behind.
+      try {
+        await user.delete();
+      } catch (_) {}
+      throw StateError(
+        'Could not save your profile: $error',
       );
-      profile.addAll({
-        'uid': user.uid,
-        'fullName': name.trim(),
-        'policeId': policeId!.trim(),
-        'assignedIntersection': assignedIntersection!.trim(),
-        'badgeImageUrl': await badgeRef.getDownloadURL(),
-        'isVerified': false,
-        'verificationStatus': 'PENDING',
-        'isActive': false,
-      });
-      final locations = await MapSearchService().search(assignedIntersection);
-      if (locations.isNotEmpty) {
-        final point = locations.first.location;
-        profile['intersectionLocation'] = GeoPoint(
-          point.latitude,
-          point.longitude,
-        );
-      }
     }
 
-    await _firestore.collection('users').doc(user.uid).set(profile);
-
-    // ── Sync driver to Supabase drivers table ────────────────
+    // ── Driver row for dispatch (Supabase `drivers`) ───────────────────────
     if (role == 'driver' && supabaseReady) {
       try {
         await RequestService.upsertDriverProfile(
@@ -125,7 +95,7 @@ class AuthService {
           vehicleType: vehicleType ?? 'Basic Ambulance',
           vehicleNumber: vehicleNumber!.trim(),
         );
-      } catch (e) {
+      } catch (_) {
         // Non-fatal: driver can still log in; profile will sync on next login
       }
     }
@@ -133,24 +103,18 @@ class AuthService {
     return credential;
   }
 
-  /// Called on login for drivers — ensures their Supabase row is up to date,
-  /// including the admin-set `isApproved` flag from Firestore.
-  static Future<void> syncDriverOnLogin({
-    required String firebaseUid,
-    required Map<String, dynamic> firestoreData,
-  }) async {
-    if (!supabaseReady) return;
-    final role = firestoreData['role'] ?? 'user';
-    if (role != 'driver') return;
+  /// Called on login for drivers — keeps the Supabase `drivers` row (used for
+  /// dispatch) aligned with the profile stored in Supabase `users`.
+  static Future<void> syncDriverOnLogin({required UserProfile profile}) async {
+    if (!supabaseReady || !profile.isDriver) return;
     try {
       await RequestService.upsertDriverProfile(
-        firebaseUid: firebaseUid,
-        name: firestoreData['name'] as String? ?? '',
-        phone: firestoreData['phone'] as String? ?? '',
-        vehicleType:
-            firestoreData['vehicleType'] as String? ?? 'Basic Ambulance',
-        vehicleNumber: firestoreData['vehicleNumber'] as String? ?? '',
-        isApproved: firestoreData['isApproved'] == true,
+        firebaseUid: profile.uid,
+        name: profile.name,
+        phone: profile.phone,
+        vehicleType: profile.vehicleType ?? 'Basic Ambulance',
+        vehicleNumber: profile.vehicleNumber ?? '',
+        isApproved: profile.isApproved,
       );
     } catch (_) {}
   }

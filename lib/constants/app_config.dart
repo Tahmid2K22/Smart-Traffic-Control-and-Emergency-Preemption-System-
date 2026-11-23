@@ -20,8 +20,8 @@ class AppConfig {
     final value = dotenv.maybeGet(key);
     if (value == null || value.isEmpty || value.startsWith('YOUR_')) {
       throw StateError(
-        '❌  Missing env key: "$key"\n'
-        '   → Copy .env.example to .env and fill in your real values.',
+        '  Missing env key: "$key"\n'
+        '  Copy .env.example to .env and fill in your real values.',
       );
     }
     return value;

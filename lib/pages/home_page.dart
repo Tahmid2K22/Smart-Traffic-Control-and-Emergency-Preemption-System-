@@ -13,6 +13,7 @@ import '../constants/colors.dart';
 import '../models/models.dart';
 
 import '../services/map_search_service.dart';
+import '../services/user_service.dart';
 import 'ambulance_booking_screen.dart';
 import 'nearby_places_page.dart';
 import 'notifications_page.dart';
@@ -73,15 +74,15 @@ class _HomePageState extends State<HomePage> {
     if (user == null) return;
     var name = user.displayName?.trim() ?? '';
     try {
-      final profile = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-      final data = profile.data();
-      final profileName = data?['name']?.toString().trim().isNotEmpty == true
-          ? data!['name'].toString().trim()
-          : data?['fullName']?.toString().trim() ?? '';
-      if (profileName.isNotEmpty) name = profileName;
+      // Profile data lives in Supabase; notifications stay in Firestore.
+      final profile = await UserService.instance.fetch(user.uid);
+      if (profile != null && profile.displayName.trim().isNotEmpty) {
+        name = profile.displayName.trim();
+      }
+    } catch (_) {
+      // Auth profile data remains a reliable fallback.
+    }
+    try {
       final unread = await FirebaseFirestore.instance
           .collection('notifications')
           .where('userId', isEqualTo: user.uid)
@@ -89,7 +90,7 @@ class _HomePageState extends State<HomePage> {
           .get();
       if (mounted) _unreadNotifications = unread.size;
     } on FirebaseException {
-      // Auth data remains a reliable fallback when optional Firestore data is unavailable.
+      // Notifications are optional; never block the dashboard on them.
     }
     if (!mounted) return;
     final safeName = name.isEmpty ? 'User' : name;

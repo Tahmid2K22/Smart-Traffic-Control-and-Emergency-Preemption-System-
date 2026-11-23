@@ -22,4 +22,5 @@ class SupabaseTables {
   static const String requests    = 'requests';
   static const String messages    = 'messages';
   static const String nidRecords  = 'nid_records';
+  static const String users       = 'users';
 }

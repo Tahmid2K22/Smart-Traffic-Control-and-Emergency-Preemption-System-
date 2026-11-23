@@ -37,7 +37,6 @@ dependencies:
   firebase_core: ^4.15.0
   firebase_auth: ^6.7.0
   cloud_firestore: ^6.10.0
-  firebase_storage: ^13.0.4
   shared_preferences: ^2.5.5
   image_picker: ^1.1.2
   google_maps_flutter: ^2.18.1
@@ -48,8 +47,6 @@ dependencies:
   http: ^1.4.0
   supabase_flutter: ^2.9.0
   flutter_dotenv: ^5.2.1
-  flutter_blue_plus: ^2.3.14   # BLE scanning & GATT
-  permission_handler: ^11.4.0  # Runtime permissions for BLE
   firebase_database: ^12.6.1
   firebase_messaging: ^16.7.1
   flutter_map: ^8.3.2
@@ -71,10 +68,10 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/app_logo.png"
+  image_path: "assets/app_icon.png"
   remove_alpha_ios: true
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/app_logo.png"
+  adaptive_icon_background: "#D32F2F"
+  adaptive_icon_foreground: "assets/app_icon.png"
 
 flutter_native_splash:
   color: "#FFFFFF"
@@ -95,7 +92,6 @@ flutter:
     - .env
     - assets/map_style.json
     - assets/app_logo.png
-    - assets/e ambulance logo.png
     - assets/map_pin.svg
 
   # The following line ensures that the Material Icons font is

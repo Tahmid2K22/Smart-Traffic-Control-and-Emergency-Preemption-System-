@@ -11,6 +11,7 @@ import '../models/intersection_point.dart';
 import 'overpass_signal_service.dart';
 import 'request_service.dart';
 import 'traffic_rtdb_service.dart';
+import 'user_service.dart';
 
 /// Who ended an emergency escape — recorded on the alert for the audit trail.
 enum EscapeReleaseSource {
@@ -227,9 +228,8 @@ class TrafficService {
   }) async {
     final uid = _auth.currentUser?.uid;
     if (uid == null) throw StateError('Sign in as a driver first.');
-    final driver = await _firestore.collection('users').doc(uid).get();
-    final profile = driver.data();
-    if (profile?['role'] != 'driver' || profile?['isApproved'] != true) {
+    final profile = await UserService.instance.fetch(uid);
+    if (profile?.role != 'driver' || profile?.isApproved != true) {
       throw StateError(
         'Only approved ambulance drivers can request an emergency escape.',
       );
@@ -274,10 +274,7 @@ class TrafficService {
     final intersectionRef = _firestore
         .collection('intersections')
         .doc(intersectionId);
-    final officers = await _firestore
-        .collection('users')
-        .where('role', isEqualTo: 'traffic_police')
-        .get();
+    final officers = await UserService.instance.fetchOfficers();
 
     // Re-read the intersection and recipients in the write transaction so an
     // admin disabling an intersection is respected and repeat taps within a
@@ -331,26 +328,15 @@ class TrafficService {
       // Officers assigned to this intersection (if any). Optional: an empty
       // list still allows the request because the light is targeted directly.
       final recipients = <String>[];
-      for (final officer in officers.docs) {
-        final current = (await transaction.get(officer.reference)).data();
-        if (current == null ||
-            current['role'] != 'traffic_police' ||
-            current['isVerified'] != true ||
-            current['isActive'] != true) {
-          continue;
-        }
-        final location = current['intersectionLocation'];
+      for (final officer in officers) {
+        if (!officer.isVerifiedOfficer || !officer.isActive) continue;
         if (intersection.matchesOfficer(
-          intersectionId: current['assignedIntersectionId'] as String?,
-          assignedIntersection: current['assignedIntersection'] as String?,
-          latitude: location is GeoPoint
-              ? location.latitude
-              : (current['intersectionLatitude'] as num?)?.toDouble(),
-          longitude: location is GeoPoint
-              ? location.longitude
-              : (current['intersectionLongitude'] as num?)?.toDouble(),
+          intersectionId: officer.assignedIntersectionId,
+          assignedIntersection: officer.assignedIntersection,
+          latitude: officer.intersectionLatitude,
+          longitude: officer.intersectionLongitude,
         )) {
-          recipients.add(officer.id);
+          recipients.add(officer.uid);
         }
       }
 
@@ -362,7 +348,7 @@ class TrafficService {
         'source': 'DRIVER_REQUEST',
         'driverUid': uid,
         'driverName':
-            profile?['name'] ?? profile?['fullName'] ?? 'Ambulance driver',
+            profile?.name ?? profile?.fullName ?? 'Ambulance driver',
         'dispatchId': rideId,
         'officerId': '',
         'intersectionId': intersection.id,
@@ -407,7 +393,7 @@ class TrafficService {
           'source': 'DRIVER_REQUEST',
           'driverUid': uid,
           'driverName':
-              profile?['name'] ?? profile?['fullName'] ?? 'Ambulance driver',
+              profile?.name ?? profile?.fullName ?? 'Ambulance driver',
           'dispatchId': rideId,
           'officerId': officerId,
           'policeUid': officerId,
@@ -557,12 +543,7 @@ class TrafficService {
   ) async {
     final signals = _signalsByDispatch[dispatchId] ?? const [];
     if (signals.isEmpty || position.heading < 0) return;
-    final officers = await _firestore
-        .collection('users')
-        .where('role', isEqualTo: 'traffic_police')
-        .where('isVerified', isEqualTo: true)
-        .where('isActive', isEqualTo: true)
-        .get();
+    final officers = await UserService.instance.fetchOfficers(onlyActive: true);
     for (final signal in signals) {
       if (!isApproachingIntersection(
         driverLat: position.latitude,
@@ -573,15 +554,9 @@ class TrafficService {
       )) {
         continue;
       }
-      for (final officer in officers.docs) {
-        final data = officer.data();
-        final location = data['intersectionLocation'];
-        final lat = location is GeoPoint
-            ? location.latitude
-            : (data['intersectionLatitude'] as num?)?.toDouble();
-        final lng = location is GeoPoint
-            ? location.longitude
-            : (data['intersectionLongitude'] as num?)?.toDouble();
+      for (final officer in officers) {
+        final lat = officer.intersectionLatitude;
+        final lng = officer.intersectionLongitude;
         if (lat == null || lng == null) continue;
         final distance = Geolocator.distanceBetween(
           position.latitude,
@@ -596,16 +571,16 @@ class TrafficService {
           lng,
         );
         if (signalToOfficer <= 250) {
-          final alertId = 'ALT_${dispatchId}_${officer.id}_${signal.id}';
+          final alertId = 'ALT_${dispatchId}_${officer.uid}_${signal.id}';
           final speed = position.speed > 1 ? position.speed : 8;
           await _firestore.collection('emergency_alerts').doc(alertId).set({
             'alertId': alertId,
-            'policeUid': officer.id,
+            'policeUid': officer.uid,
             'driverUid': driverUid,
             'dispatchId': dispatchId,
-            'officerId': officer.id,
-            'intersection': data['assignedIntersection'] ?? '',
-            'intersectionName': data['assignedIntersection'] ?? '',
+            'officerId': officer.uid,
+            'intersection': officer.assignedIntersection ?? '',
+            'intersectionName': officer.assignedIntersection ?? '',
             'intersectionLocation': GeoPoint(signal.latitude, signal.longitude),
             'driverLocation': GeoPoint(position.latitude, position.longitude),
             'distanceMeters': distance,

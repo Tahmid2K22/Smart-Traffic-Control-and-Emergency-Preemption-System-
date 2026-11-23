@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -8,13 +9,11 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-
 import '../constants/colors.dart';
 import '../services/map_search_service.dart';
 import '../services/places_api_service.dart';
 import '../services/request_service.dart';
+import '../services/user_service.dart';
 import 'tracking_page.dart';
 
 class AmbulanceBookingScreen extends StatefulWidget {
@@ -407,13 +406,10 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
 
     try {
       // Fetch user profile for name and phone
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-      final data = doc.data() ?? {};
-      final userName = data['name'] ?? user.displayName ?? 'User';
-      final userPhone = data['phone'] ?? '';
+      final profile = await UserService.instance.fetch(user.uid);
+      final userName =
+          profile?.displayName ?? user.displayName ?? 'User';
+      final userPhone = profile?.phone ?? '';
 
       // Create request in Supabase
       final requestId = await RequestService.createRequest(

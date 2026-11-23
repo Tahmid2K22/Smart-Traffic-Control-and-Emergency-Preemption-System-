@@ -1,9 +1,10 @@
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+
+import 'user_service.dart';
 
 /// Registers the signed-in officer's FCM token on their user document so the
 /// `notifyEmergencyEscape` Cloud Function can push escape requests to them.
@@ -14,14 +15,12 @@ import 'package:flutter/foundation.dart';
 /// Push is Android/iOS only — on desktop/web this service is a no-op so the
 /// app never touches an unsupported plugin.
 class PushNotificationService {
-  PushNotificationService({FirebaseAuth? auth, FirebaseFirestore? firestore})
-    : _auth = auth ?? FirebaseAuth.instance,
-      _firestore = firestore ?? FirebaseFirestore.instance;
+  PushNotificationService({FirebaseAuth? auth})
+    : _auth = auth ?? FirebaseAuth.instance;
 
   /// Lazily created only on supported platforms (see [isSupported]).
   FirebaseMessaging? _messaging;
   final FirebaseAuth _auth;
-  final FirebaseFirestore _firestore;
   StreamSubscription<String>? _tokenRefreshSub;
   bool _registering = false;
 
@@ -81,16 +80,10 @@ class PushNotificationService {
 
   Future<void> _saveToken(String uid, String token) async {
     try {
-      await _firestore.collection('users').doc(uid).set({
-        'fcmTokens': {
-          token: {
-            'platform': defaultTargetPlatform == TargetPlatform.android
-                ? 'android'
-                : 'ios',
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        },
-      }, SetOptions(merge: true));
+      final platform = defaultTargetPlatform == TargetPlatform.android
+          ? 'android'
+          : 'ios';
+      await UserService.instance.addFcmToken(uid, token, platform: platform);
     } catch (_) {
       // Non-fatal: the Cloud Function will simply find no token yet.
     }

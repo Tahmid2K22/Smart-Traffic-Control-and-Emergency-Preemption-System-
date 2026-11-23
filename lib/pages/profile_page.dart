@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:velocity_x/velocity_x.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/colors.dart';
 import '../constants/districts.dart';
+import '../services/user_service.dart';
+
 import 'hospital_register_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -49,33 +50,27 @@ class _ProfilePageState extends State<ProfilePage> {
 
     if (user != null) {
       try {
-        final snapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .get();
-        final data = snapshot.data();
-        if (data != null) {
-          name = data['name']?.toString().trim().isNotEmpty == true
-              ? data['name'].toString().trim()
-              : data['fullName']?.toString().trim().isNotEmpty == true
-              ? data['fullName'].toString().trim()
+        final profile = await UserService.instance.fetch(user.uid);
+        if (profile != null) {
+          name = profile.name.trim().isNotEmpty
+              ? profile.name.trim()
+              : profile.fullName.trim().isNotEmpty
+              ? profile.fullName.trim()
               : name.isNotEmpty
               ? name
               : user.displayName?.trim() ?? '';
-          email = data['email']?.toString().trim().isNotEmpty == true
-              ? data['email'].toString().trim()
+          email = profile.email.trim().isNotEmpty
+              ? profile.email.trim()
               : user.email?.trim() ?? email;
-          phone = data['phone']?.toString().trim().isNotEmpty == true
-              ? data['phone'].toString().trim()
-              : phone;
-          final firestoreCity = data['city']?.toString().trim() ?? '';
-          if (firestoreCity.isNotEmpty) city = firestoreCity;
+          phone = profile.phone.trim().isNotEmpty ? profile.phone.trim() : phone;
+          final cityFromProfile = profile.city?.trim() ?? '';
+          if (cityFromProfile.isNotEmpty) city = cityFromProfile;
         } else {
           name = name.isNotEmpty ? name : user.displayName?.trim() ?? '';
           email = email.isNotEmpty ? email : user.email?.trim() ?? '';
         }
-      } on FirebaseException catch (error) {
-        debugPrint('Failed to fetch profile: ${error.message}');
+      } catch (error) {
+        debugPrint('Failed to fetch profile: $error');
       }
     }
 
@@ -604,24 +599,20 @@ class _ProfilePageState extends State<ProfilePage> {
                           await prefs.setString('userCity', _city!);
                         }
 
-                        // Save to Firestore
+                        // Save to Supabase
                         if (user != null) {
                           try {
-                            await FirebaseFirestore.instance
-                                .collection('users')
-                                .doc(user.uid)
-                                .set({
-                                  'name': _name,
-                                  'fullName': _name,
-                                  'email': _email,
-                                  'phone': _phone,
-                                  'city': _city,
-                                  'uid': user.uid,
-                                }, SetOptions(merge: true));
+                            await UserService.instance.update(user.uid, {
+                              'name': _name,
+                              'full_name': _name,
+                              'email': _email,
+                              'phone': _phone,
+                              'city': _city,
+                            });
                             await user.updateDisplayName(_name);
                           } catch (e) {
                             debugPrint(
-                              'Failed to update Firestore profile: $e',
+                              'Failed to update profile: $e',
                             );
                             if (mounted) {
                               messenger.showSnackBar(

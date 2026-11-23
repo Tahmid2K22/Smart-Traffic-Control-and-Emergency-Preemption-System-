@@ -2,6 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/user_profile.dart';
+import 'user_service.dart';
+
 // handles all admin firestore stuff
 class AdminService {
   AdminService({FirebaseFirestore? firestore})
@@ -51,74 +54,15 @@ class AdminService {
 
   // ── Driver management ──────────────────────────────────────────────────────
 
-  // live stream of all drivers
-  Stream<QuerySnapshot> allDriversStream() => _firestore
-      .collection('users')
-      .where('role', isEqualTo: 'driver')
-      .snapshots();
-
   // only drivers waiting for approval
-  Stream<QuerySnapshot> pendingDriversStream() => _firestore
-      .collection('users')
-      .where('role', isEqualTo: 'driver')
-      .where('isApproved', isEqualTo: false)
-      .snapshots();
-
-  Stream<QuerySnapshot> pendingTrafficPoliceStream() => _firestore
-      .collection('users')
-      .where('role', isEqualTo: 'traffic_police')
-      .where('verificationStatus', isEqualTo: 'PENDING')
-      .snapshots();
-
-  Future<void> verifyTrafficPolice(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).update({
-      'isVerified': true,
-      'verificationStatus': 'APPROVED',
-      'isActive': false,
-    });
-    await _writeLog(
-      action: 'approve_traffic_police',
-      targetType: 'traffic_police',
-      targetId: uid,
-      targetName: name,
-    );
-  }
-
-  Future<void> rejectTrafficPolice(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).update({
-      'isVerified': false,
-      'verificationStatus': 'REJECTED',
-      'isActive': false,
-    });
-    await _writeLog(
-      action: 'reject_traffic_police',
-      targetType: 'traffic_police',
-      targetId: uid,
-      targetName: name,
-    );
-  }
-
-  Future<void> setOfficerActive(String uid, bool isActive) =>
-      _firestore.collection('users').doc(uid).update({'isActive': isActive});
-
-  Future<void> overrideSignal(String alertId, String dispatchId) =>
-      _firestore.collection('emergency_alerts').doc(alertId).set({
-        'status': 'SIGNAL_OVERRIDDEN',
-        'signalState': 'EMERGENCY_OVERRIDE',
-        'dispatchId': dispatchId,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-
-  Future<void> clearEmergencyAlert(String alertId) =>
-      _firestore.collection('emergency_alerts').doc(alertId).update({
-        'status': 'CLEARED',
-        'clearedAt': FieldValue.serverTimestamp(),
-      });
+  Stream<List<UserProfile>> pendingDriversStream() =>
+      UserService.instance.watchUsers(roles: const ['driver'], isApproved: false);
 
   // regular users, admins, and traffic police
-  Stream<QuerySnapshot> allUsersStream() => _firestore
-      .collection('users')
-      .where('role', whereIn: ['patient', 'user', 'admin', 'traffic_police']).snapshots();
+  Stream<List<UserProfile>> allUsersStream() =>
+      UserService.instance.watchUsers(
+        roles: const ['patient', 'user', 'admin', 'traffic_police'],
+      );
 
   // make a user traffic police
   Future<void> makeTrafficPolice(
@@ -127,14 +71,14 @@ class AdminService {
     String policeId = '',
     String assignedIntersection = '',
   }) async {
-    await _firestore.collection('users').doc(uid).update({
+    await UserService.instance.update(uid, {
       'role': 'traffic_police',
-      'isVerified': true,
-      'verificationStatus': 'APPROVED',
-      'isActive': false,
-      if (policeId.isNotEmpty) 'policeId': policeId,
+      'is_verified': true,
+      'verification_status': 'APPROVED',
+      'is_active': false,
+      if (policeId.isNotEmpty) 'police_id': policeId,
       if (assignedIntersection.isNotEmpty)
-        'assignedIntersection': assignedIntersection,
+        'assigned_intersection': assignedIntersection,
     });
     await _writeLog(
       action: 'make_traffic_police',
@@ -146,11 +90,11 @@ class AdminService {
 
   // revoke traffic police powers back to standard user
   Future<void> removeTrafficPolice(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).update({
+    await UserService.instance.update(uid, {
       'role': 'user',
-      'isVerified': false,
-      'verificationStatus': 'NONE',
-      'isActive': false,
+      'is_verified': false,
+      'verification_status': 'NONE',
+      'is_active': false,
     });
     await _writeLog(
       action: 'remove_traffic_police',
@@ -162,7 +106,7 @@ class AdminService {
 
   // approve driver
   Future<void> verifyDriver(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).update({'isApproved': true});
+    await UserService.instance.update(uid, {'is_approved': true});
     await _writeLog(
       action: 'approve_driver',
       targetType: 'driver',
@@ -173,7 +117,7 @@ class AdminService {
 
   // un-approve driver
   Future<void> rejectDriver(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).update({'isApproved': false});
+    await UserService.instance.update(uid, {'is_approved': false});
     await _writeLog(
       action: 'reject_driver',
       targetType: 'driver',
@@ -184,7 +128,7 @@ class AdminService {
 
   // give someone admin powers
   Future<void> makeAdmin(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).update({'role': 'admin'});
+    await UserService.instance.update(uid, {'role': 'admin'});
     await _writeLog(
       action: 'make_admin',
       targetType: 'user',
@@ -195,7 +139,7 @@ class AdminService {
 
   // take admin powers away
   Future<void> removeAdmin(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).update({'role': 'user'});
+    await UserService.instance.update(uid, {'role': 'user'});
     await _writeLog(
       action: 'remove_admin',
       targetType: 'user',
@@ -204,9 +148,9 @@ class AdminService {
     );
   }
 
-  // removes the user doc — auth account stays but they can't use the app
+  // removes the user profile — auth account stays but they can't use the app
   Future<void> deleteUser(String uid, {String name = ''}) async {
-    await _firestore.collection('users').doc(uid).delete();
+    await UserService.instance.delete(uid);
     await _writeLog(
       action: 'delete_user',
       targetType: 'user',
@@ -241,9 +185,7 @@ class AdminService {
     await _firestore.collection('hospitals').doc(id).update({'isApproved': true});
     final registeredBy = hospital.data()?['registeredBy'] as String?;
     if (registeredBy != null && registeredBy.isNotEmpty) {
-      await _firestore.collection('users').doc(registeredBy).update({
-        'isApproved': true,
-      });
+      await UserService.instance.update(registeredBy, {'is_approved': true});
     }
     await _writeLog(
       action: 'approve_hospital',
@@ -269,49 +211,31 @@ class AdminService {
   // grabs total counts for the overview cards
   Future<Map<String, int>> fetchStats() async {
     final results = await Future.wait([
-      _firestore
-          .collection('users')
-          .where('role', isEqualTo: 'traffic_police')
-          .where('verificationStatus', isEqualTo: 'PENDING')
-          .count()
-          .get(),
-      _firestore
-          .collection('users')
-          .where('role', whereIn: ['user', 'patient'])
-          .count()
-          .get(),
-      _firestore
-          .collection('users')
-          .where('role', isEqualTo: 'driver')
-          .count()
-          .get(),
-      _firestore
-          .collection('users')
-          .where('role', isEqualTo: 'driver')
-          .where('isApproved', isEqualTo: false)
-          .count()
-          .get(),
-      _firestore
-          .collection('users')
-          .where('role', isEqualTo: 'admin')
-          .count()
-          .get(),
-      _firestore.collection('hospitals').count().get(),
+      UserService.instance.countUsers(
+        role: 'traffic_police',
+        verificationStatus: 'PENDING',
+      ),
+      UserService.instance.countUsers(roles: const ['user', 'patient']),
+      UserService.instance.countUsers(role: 'driver'),
+      UserService.instance.countUsers(role: 'driver', isApproved: false),
+      UserService.instance.countUsers(role: 'admin'),
+      _firestore.collection('hospitals').count().get().then((r) => r.count ?? 0),
       _firestore
           .collection('hospitals')
           .where('isApproved', isEqualTo: false)
           .count()
-          .get(),
+          .get()
+          .then((r) => r.count ?? 0),
     ]);
 
     return {
-      'pendingTrafficPolice': results[0].count ?? 0,
-      'totalUsers': results[1].count ?? 0,
-      'totalDrivers': results[2].count ?? 0,
-      'pendingDrivers': results[3].count ?? 0,
-      'totalAdmins': results[4].count ?? 0,
-      'totalHospitals': results[5].count ?? 0,
-      'pendingHospitals': results[6].count ?? 0,
+      'pendingTrafficPolice': results[0],
+      'totalUsers': results[1],
+      'totalDrivers': results[2],
+      'pendingDrivers': results[3],
+      'totalAdmins': results[4],
+      'totalHospitals': results[5],
+      'pendingHospitals': results[6],
     };
   }
 }
