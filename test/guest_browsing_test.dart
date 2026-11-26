@@ -1,5 +1,6 @@
 import 'package:e_ambulance/main.dart';
 import 'package:e_ambulance/pages/ambulance_booking_screen.dart';
+import 'package:e_ambulance/pages/emergency_services_page.dart';
 import 'package:e_ambulance/pages/home_page.dart';
 import 'package:e_ambulance/pages/login_page.dart';
 import 'package:e_ambulance/pages/nearby_places_page.dart';
@@ -60,6 +61,16 @@ void main() {
       expect(find.byType(LoginPage), findsNothing);
     });
   }
+
+  testWidgets('999 services are available from the dashboard', (tester) async {
+    await openGuestHome(tester);
+    await tester.ensureVisible(find.text('999 Services'));
+    await tester.tap(find.text('999 Services'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(EmergencyServicesPage), findsOneWidget);
+    expect(find.text('999 Services'), findsWidgets);
+  });
 
   testWidgets('activity and profile tabs are hidden for guests', (
     tester,

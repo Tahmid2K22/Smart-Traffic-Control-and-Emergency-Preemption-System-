@@ -13,6 +13,7 @@ import 'drivers_management_page.dart';
 import 'users_management_page.dart';
 import 'hospitals_management_page.dart';
 import 'intersections_management_page.dart';
+import 'emergency_services_management_page.dart';
 import 'admin_activity_log_page.dart';
 
 class AdminDashboardPage extends StatefulWidget {
@@ -304,6 +305,26 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => const IntersectionsManagementPage(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(
+                Icons.emergency_rounded,
+                color: AppColors.primary,
+              ),
+              title: const Text('Manage 999 services'),
+              subtitle: const Text(
+                'Add and update police stations, fire services and more',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const EmergencyServicesManagementPage(),
                 ),
               ),
             ),
