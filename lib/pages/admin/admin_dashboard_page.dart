@@ -411,7 +411,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
         crossAxisCount: constraints.maxWidth >= 700 ? 3 : 2,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
-        childAspectRatio: constraints.maxWidth >= 700 ? 1.8 : 1.35,
+        childAspectRatio: constraints.maxWidth >= 700 ? 1.5 : 1.1,
         children: cards.map(_buildStatCard).toList(),
       ),
     );
