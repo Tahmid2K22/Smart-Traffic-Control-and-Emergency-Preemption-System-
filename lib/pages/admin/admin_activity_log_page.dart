@@ -67,13 +67,11 @@ class AdminActivityLogPage extends StatelessWidget {
   }
 }
 
-// ── Individual log entry ──────────────────────────────────────────────────────
 
 class _LogTile extends StatelessWidget {
   const _LogTile({required this.log});
   final AdminLog log;
 
-  // Readable label + icon + color for each action key
   static const _actionMeta = {
     'approve_driver': (
       label: 'Approved Driver',
@@ -150,7 +148,6 @@ class _LogTile extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Icon badge
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
@@ -161,12 +158,10 @@ class _LogTile extends StatelessWidget {
           ),
           12.widthBox,
 
-          // Content
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Action label
                 Text(
                   actionLabel,
                   style: GoogleFonts.poppins(
@@ -177,7 +172,6 @@ class _LogTile extends StatelessWidget {
                 ),
                 4.heightBox,
 
-                // Target
                 Row(
                   children: [
                     _targetIcon(log.targetType),
@@ -197,7 +191,6 @@ class _LogTile extends StatelessWidget {
                 ),
                 6.heightBox,
 
-                // Admin name + timestamp
                 Row(
                   children: [
                     const Icon(Icons.person_rounded,

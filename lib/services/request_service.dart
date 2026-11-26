@@ -7,17 +7,18 @@ import '../models/message_model.dart';
 import '../models/request_model.dart';
 import 'supabase_service.dart';
 
-/// Service layer for all ambulance request operations.
-/// Uses Supabase Postgres + real-time for the driver dispatch system
-/// while Firebase Auth provides identity.
+/// Ambulance request ops over Supabase (Firebase Auth for identity).
 class RequestService {
   RequestService._();
 
+  /// Current time as a UTC ISO string. The columns are timestamptz and Postgres
+  /// reads an offset-less timestamp as UTC, so a local toIso8601String() would
+  /// be off by the device's timezone offset.
+  static String _utcNowIso() => DateTime.now().toUtc().toIso8601String();
+
   // ── Driver helpers ──────────────────────────────────────────────────────────
 
-  /// Upserts a driver row in Supabase when a driver logs in or registers.
-  /// [isApproved] mirrors the Firestore `isApproved` field so the Supabase
-  /// `is_approved` column is always in sync with admin decisions.
+  /// Upsert driver row (isApproved mirrors Firestore admin decision).
   static Future<void> upsertDriverProfile({
     required String firebaseUid,
     required String name,
@@ -37,7 +38,6 @@ class RequestService {
     }, onConflict: 'firebase_uid');
   }
 
-  /// Fetches the driver row for the currently signed-in Firebase user.
   static Future<DriverProfile?> getMyDriverProfile() async {
     if (!supabaseReady) return null;
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -51,7 +51,6 @@ class RequestService {
     return DriverProfile.fromMap(response);
   }
 
-  /// Toggles the driver online/offline status.
   static Future<void> setOnlineStatus({
     required String driverId,
     required bool isOnline,
@@ -63,7 +62,6 @@ class RequestService {
         .eq('id', driverId);
   }
 
-  /// Updates the driver's live GPS coordinates.
   static Future<void> updateDriverLocation({
     required String driverId,
     required double lat,
@@ -76,14 +74,14 @@ class RequestService {
         .update({
           'current_lat': lat,
           'current_lng': lng,
-          'updated_at': DateTime.now().toIso8601String(),
+          'updated_at': _utcNowIso(),
         })
         .eq('id', driverId);
   }
 
   // ── User request operations ─────────────────────────────────────────────────
 
-  /// Creates a new ambulance request and returns its UUID.
+  /// Create a request, return its UUID.
   static Future<String> createRequest({
     required String userFirebaseUid,
     required String userName,
@@ -135,7 +133,7 @@ class RequestService {
     }
   }
 
-  /// Fetches all requests for the current user (for Activity page).
+  /// All requests for current user.
   static Future<List<AmbulanceRequest>> getUserRequests() async {
     if (!supabaseReady) return [];
     await expireStalePendingRequests();
@@ -151,7 +149,7 @@ class RequestService {
         .toList();
   }
 
-  /// Cancels a request before it is completed.
+  /// Cancel a request (driver redispatch or user cancel).
   static Future<void> cancelRequest(
     String requestId, {
     String? driverId,
@@ -170,7 +168,7 @@ class RequestService {
             'driver_id': null,
             'accepted_at': null,
             'completed_at': null,
-            'created_at': DateTime.now().toIso8601String(),
+            'created_at': _utcNowIso(),
           })
           .eq('id', requestId)
           .eq('driver_id', driverId)
@@ -222,18 +220,14 @@ class RequestService {
         );
       }
     }
-    final driverQuery = sb.from(SupabaseTables.drivers).update({
-      'current_request_id': null,
-    });
-    if (driverId == null) {
-      await driverQuery.eq('current_request_id', requestId);
-    } else {
-      await driverQuery.eq('id', driverId);
-    }
+    // Whichever driver held the trip is free again.
+    await sb
+        .from(SupabaseTables.drivers)
+        .update({'current_request_id': null})
+        .eq('current_request_id', requestId);
   }
 
-  /// Cancels a pending request when the driver search window expires.
-  /// Returns false when a driver accepted it before the timeout won the race.
+  /// Expire a pending request on search timeout; false if a driver won the race.
   static Future<bool> expirePendingRequest(String requestId) async {
     if (!supabaseReady) {
       throw StateError('Supabase is not initialised.');
@@ -247,11 +241,11 @@ class RequestService {
     return expired.isNotEmpty;
   }
 
-  /// Cancels every pending request whose search window is 10 minutes old.
-  /// This sweep also works after the app restarts or comes back online.
+  /// Expire stale pending requests (>10 min); works after restart/reconnect.
   static Future<int> expireStalePendingRequests() async {
     if (!supabaseReady) return 0;
     final cutoff = DateTime.now()
+        .toUtc()
         .subtract(const Duration(minutes: 10))
         .toIso8601String();
     final expired = await sb
@@ -265,18 +259,19 @@ class RequestService {
 
   // ── Driver accept / reject / complete ───────────────────────────────────────
 
-  /// Driver accepts a pending request.
   static Future<void> acceptRequest({
     required String requestId,
     required String driverId,
   }) async {
-    if (!supabaseReady) return;
+    if (!supabaseReady) {
+      throw StateError('Supabase is not initialised.');
+    }
     final accepted = await sb
         .from(SupabaseTables.requests)
         .update({
           'driver_id': driverId,
           'status': RequestStatus.accepted.toDbString(),
-          'accepted_at': DateTime.now().toIso8601String(),
+          'accepted_at': _utcNowIso(),
         })
         .eq('id', requestId)
         .eq('status', RequestStatus.pending.toDbString())
@@ -292,7 +287,6 @@ class RequestService {
         .eq('id', driverId);
   }
 
-  /// Driver marks themselves as arrived at pickup.
   static Future<void> markArrived(String requestId) async {
     if (!supabaseReady) {
       throw StateError('Supabase is not initialised.');
@@ -313,7 +307,6 @@ class RequestService {
     }
   }
 
-  /// Driver marks the trip as completed.
   static Future<void> completeRequest({
     required String requestId,
     required String driverId,
@@ -325,7 +318,7 @@ class RequestService {
         .from(SupabaseTables.requests)
         .update({
           'status': RequestStatus.completed.toDbString(),
-          'completed_at': DateTime.now().toIso8601String(),
+          'completed_at': _utcNowIso(),
         })
         .eq('id', requestId)
         .inFilter('status', [
@@ -346,7 +339,7 @@ class RequestService {
 
   // ── Real-time streams ───────────────────────────────────────────────────────
 
-  /// Stream of ALL pending requests — driver listens to this to get incoming jobs.
+  /// Stream of all pending requests (incoming jobs).
   static Stream<List<AmbulanceRequest>> streamPendingRequests() {
     if (!supabaseReady) return const Stream.empty();
     expireStalePendingRequests();
@@ -358,7 +351,7 @@ class RequestService {
         .map((rows) => rows.map(AmbulanceRequest.fromMap).toList());
   }
 
-  /// Stream of a specific request — user listens after booking to track status.
+  /// Stream of a specific request (tracking).
   static Stream<AmbulanceRequest?> streamRequest(String requestId) {
     if (!supabaseReady) return const Stream.empty();
     return sb
@@ -381,9 +374,7 @@ class RequestService {
         });
   }
 
-  /// Reads the request with its current driver GPS position. This short
-  /// refresh is needed because driver coordinates change independently of the
-  /// request row.
+  /// Read request + driver GPS (coords change independently of request row).
   static Future<AmbulanceRequest?> getRequest(String requestId) async {
     if (!supabaseReady) return null;
     final row = await sb
@@ -396,8 +387,7 @@ class RequestService {
         : AmbulanceRequest.fromMap(Map<String, dynamic>.from(row));
   }
 
-  /// Counts online ambulances close enough to receive the request. The
-  /// dispatch radius grows as the request waits, like a ride-hailing system.
+  /// Count online ambulances in dispatch radius (grows as request waits).
   static Stream<int> streamNearbyDriverCount({
     required double pickupLat,
     required double pickupLng,
@@ -455,7 +445,7 @@ class RequestService {
     return earthRadiusKm * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
   }
 
-  /// Stream of the driver's own active requests.
+  /// Stream of the driver's active requests.
   static Stream<AmbulanceRequest?> streamDriverActiveRequest(String driverId) {
     if (!supabaseReady) return const Stream.empty();
     return sb
@@ -477,9 +467,7 @@ class RequestService {
         });
   }
 
-  /// Whether [requestId] is an active ride (accepted/en_route/arrived) that
-  /// belongs to the signed-in driver. Used to gate emergency escape requests:
-  /// they are only allowed while the ambulance is on an active trip.
+  /// Whether requestId is an active ride owned by signed-in driver (gates escape).
   static Future<bool> isActiveRideForCurrentDriver(String requestId) async {
     if (!supabaseReady) return false;
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -503,28 +491,29 @@ class RequestService {
 
   // ── Chat / messaging ────────────────────────────────────────────────────────
 
-  /// Sends a chat message for a given request.
   static Future<void> sendMessage({
     required String requestId,
     required SenderRole senderRole,
     required String senderName,
     required String body,
   }) async {
-    if (!supabaseReady) return;
+    if (!supabaseReady) {
+      throw StateError('Supabase is not initialised.');
+    }
     await sb.from(SupabaseTables.messages).insert({
       'request_id': requestId,
       'sender_role': senderRole.toDbString(),
       'sender_name': senderName,
       'body': body,
     });
-    // Update last_message_at on the request for unread badge support
+    // Update last_message_at for unread badge.
     await sb
         .from(SupabaseTables.requests)
-        .update({'last_message_at': DateTime.now().toIso8601String()})
+        .update({'last_message_at': _utcNowIso()})
         .eq('id', requestId);
   }
 
-  /// Real-time stream of all messages for a given request, oldest first.
+  /// Real-time messages for a request, oldest first.
   static Stream<List<ChatMessage>> streamMessages(String requestId) {
     if (!supabaseReady) return const Stream.empty();
     return sb
@@ -535,7 +524,7 @@ class RequestService {
         .map((rows) => rows.map(ChatMessage.fromMap).toList());
   }
 
-  /// Fetch all messages for a request once (for read-only history view).
+  /// Fetch messages once (read-only history).
   static Future<List<ChatMessage>> getMessages(String requestId) async {
     if (!supabaseReady) return [];
     final rows = await sb

@@ -1,6 +1,4 @@
-/// A user profile stored in the Supabase `users` table.
-///
-/// Firebase Auth owns authentication (email/password, session, uid)
+/// User profile in Supabase users table; Firebase Auth owns auth.
 class UserProfile {
   const UserProfile({
     required this.uid,
@@ -27,7 +25,7 @@ class UserProfile {
     this.fcmTokens = const {},
   });
 
-  /// Firebase Auth uid — also the join key for every other table.
+  /// Firebase Auth uid; join key for other tables.
   final String uid;
   final String name;
   final String fullName;
@@ -36,7 +34,6 @@ class UserProfile {
   final String? city;
   final String? address;
 
-  /// other
   final String role;
 
   final bool isApproved;
@@ -62,7 +59,7 @@ class UserProfile {
   bool get isTrafficOfficer => role == 'traffic_police';
   bool get isHospital => role == 'hospital';
 
-  /// Verified officer with an admin-granted police role.
+  /// Verified officer with admin-granted police role.
   bool get isVerifiedOfficer =>
       isTrafficOfficer &&
       isVerified &&
@@ -131,8 +128,7 @@ class UserProfile {
     );
   }
 
-  /// Camel-case view of the profile, kept so screens written against the old
-  /// Firestore document shape keep working unchanged.
+  /// Camel-case view for older Firestore-shaped screens.
   Map<String, dynamic> toData() => {
     'uid': uid,
     'name': name,
@@ -158,8 +154,7 @@ class UserProfile {
     'fcmTokens': fcmTokens,
   };
 
-  /// Supabase row (snake_case). Only non-null values are included so partial
-  /// updates never blank out existing columns.
+  /// Supabase row (snake_case); omits nulls so partial updates don't blank columns.
   Map<String, dynamic> toRow() => {
     'firebase_uid': uid,
     'name': name,

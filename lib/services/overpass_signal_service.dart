@@ -40,11 +40,15 @@ class OverpassSignalService {
 node["highway"="traffic_signals"]($minLat,$minLng,$maxLat,$maxLng);
 out body;
 ''';
-    final response = await http.post(
-      Uri.parse(_endpoint),
-      body: {'data': query},
-      headers: const {'User-Agent': 'com.example.ambulance_app'},
-    );
+    final response = await http
+        .post(
+          Uri.parse(_endpoint),
+          body: {'data': query},
+          headers: const {
+            'User-Agent': 'EAmbulanceApp/1.0 (contact@ambulance.bd)',
+          },
+        )
+        .timeout(const Duration(seconds: 20));
     if (response.statusCode != 200) {
       throw StateError('Overpass returned HTTP ${response.statusCode}.');
     }

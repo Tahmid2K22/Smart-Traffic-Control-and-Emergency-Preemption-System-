@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_profile.dart';
 import 'user_service.dart';
 
-// handles all admin firestore stuff
 class AdminService {
   AdminService({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -45,7 +44,7 @@ class AdminService {
     }
   }
 
-  /// Stream of all admin logs, newest first.
+  /// All admin logs, newest first.
   Stream<QuerySnapshot> adminLogsStream() => _firestore
       .collection('admin_logs')
       .orderBy('timestamp', descending: true)
@@ -54,17 +53,14 @@ class AdminService {
 
   // ── Driver management ──────────────────────────────────────────────────────
 
-  // only drivers waiting for approval
   Stream<List<UserProfile>> pendingDriversStream() =>
       UserService.instance.watchUsers(roles: const ['driver'], isApproved: false);
 
-  // regular users, admins, and traffic police
   Stream<List<UserProfile>> allUsersStream() =>
       UserService.instance.watchUsers(
         roles: const ['patient', 'user', 'admin', 'traffic_police'],
       );
 
-  // make a user traffic police
   Future<void> makeTrafficPolice(
     String uid, {
     String name = '',
@@ -75,7 +71,6 @@ class AdminService {
       'role': 'traffic_police',
       'is_verified': true,
       'verification_status': 'APPROVED',
-      'is_active': false,
       if (policeId.isNotEmpty) 'police_id': policeId,
       if (assignedIntersection.isNotEmpty)
         'assigned_intersection': assignedIntersection,
@@ -88,13 +83,11 @@ class AdminService {
     );
   }
 
-  // revoke traffic police powers back to standard user
   Future<void> removeTrafficPolice(String uid, {String name = ''}) async {
     await UserService.instance.update(uid, {
       'role': 'user',
       'is_verified': false,
       'verification_status': 'NONE',
-      'is_active': false,
     });
     await _writeLog(
       action: 'remove_traffic_police',
@@ -104,7 +97,6 @@ class AdminService {
     );
   }
 
-  // approve driver
   Future<void> verifyDriver(String uid, {String name = ''}) async {
     await UserService.instance.update(uid, {'is_approved': true});
     await _writeLog(
@@ -115,7 +107,6 @@ class AdminService {
     );
   }
 
-  // un-approve driver
   Future<void> rejectDriver(String uid, {String name = ''}) async {
     await UserService.instance.update(uid, {'is_approved': false});
     await _writeLog(
@@ -126,7 +117,6 @@ class AdminService {
     );
   }
 
-  // give someone admin powers
   Future<void> makeAdmin(String uid, {String name = ''}) async {
     await UserService.instance.update(uid, {'role': 'admin'});
     await _writeLog(
@@ -137,7 +127,6 @@ class AdminService {
     );
   }
 
-  // take admin powers away
   Future<void> removeAdmin(String uid, {String name = ''}) async {
     await UserService.instance.update(uid, {'role': 'user'});
     await _writeLog(
@@ -148,7 +137,7 @@ class AdminService {
     );
   }
 
-  // removes the user profile — auth account stays but they can't use the app
+  // deletes profile only; auth account stays but unusable
   Future<void> deleteUser(String uid, {String name = ''}) async {
     await UserService.instance.delete(uid);
     await _writeLog(
@@ -161,25 +150,24 @@ class AdminService {
 
   // ── Hospital management ────────────────────────────────────────────────────
 
-  /// All hospitals (for admin management view)
+  /// All hospitals.
   Stream<QuerySnapshot> allHospitalsStream() => _firestore
       .collection('hospitals')
       .orderBy('createdAt', descending: true)
       .snapshots();
 
-  /// Hospitals pending approval
+  /// Pending hospitals.
   Stream<QuerySnapshot> pendingHospitalsStream() => _firestore
       .collection('hospitals')
       .where('isApproved', isEqualTo: false)
       .snapshots();
 
-  /// Only approved hospitals (used by booking screen)
+  /// Approved hospitals (booking screen).
   Stream<QuerySnapshot> approvedHospitalsStream() => _firestore
       .collection('hospitals')
       .where('isApproved', isEqualTo: true)
       .snapshots();
 
-  /// Approve a hospital
   Future<void> approveHospital(String id, {String name = ''}) async {
     final hospital = await _firestore.collection('hospitals').doc(id).get();
     await _firestore.collection('hospitals').doc(id).update({'isApproved': true});
@@ -195,11 +183,30 @@ class AdminService {
     );
   }
 
-  /// Reject (delete) a hospital registration
-  Future<void> rejectHospital(String id, {String name = ''}) async {
+  /// Revoke an approved hospital — flips approval flags without deleting data.
+  Future<void> revokeHospital(String id, {String name = ''}) async {
+    final hospital = await _firestore.collection('hospitals').doc(id).get();
+    await _firestore
+        .collection('hospitals')
+        .doc(id)
+        .update({'isApproved': false});
+    final registeredBy = hospital.data()?['registeredBy'] as String?;
+    if (registeredBy != null && registeredBy.isNotEmpty) {
+      await UserService.instance.update(registeredBy, {'is_approved': false});
+    }
+    await _writeLog(
+      action: 'revoke_hospital',
+      targetType: 'hospital',
+      targetId: id,
+      targetName: name,
+    );
+  }
+
+  /// Hard-delete a hospital registration (used by the Delete button only).
+  Future<void> deleteHospital(String id, {String name = ''}) async {
     await _firestore.collection('hospitals').doc(id).delete();
     await _writeLog(
-      action: 'reject_hospital',
+      action: 'delete_hospital',
       targetType: 'hospital',
       targetId: id,
       targetName: name,
@@ -208,7 +215,7 @@ class AdminService {
 
   // ── Stats ──────────────────────────────────────────────────────────────────
 
-  // grabs total counts for the overview cards
+  // totals for overview cards
   Future<Map<String, int>> fetchStats() async {
     final results = await Future.wait([
       UserService.instance.countUsers(

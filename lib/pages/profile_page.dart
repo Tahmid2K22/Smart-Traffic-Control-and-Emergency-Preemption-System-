@@ -18,13 +18,13 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  // user data
+
   String _name = 'Loading...';
   String _email = 'Loading...';
   String _phone = 'Loading...';
   String? _city;
 
-  // text controllers
+
   late TextEditingController _nameCtrl;
   late TextEditingController _emailCtrl;
   late TextEditingController _phoneCtrl;
@@ -122,7 +122,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // header
+
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
@@ -150,7 +150,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // profile card
+
   Widget _buildProfileCard() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
@@ -174,7 +174,7 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         child: Row(
           children: [
-            // avatar
+
             Container(
               width: 72,
               height: 72,
@@ -229,7 +229,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // personal info
+
   Widget _buildInfoSection() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -347,13 +347,13 @@ class _ProfilePageState extends State<ProfilePage> {
     child: Divider(height: 1, color: Color(0xFFEFEFEF)),
   );
 
-  // actions
+
   Widget _buildActionButtons(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Column(
         children: [
-          // ── Update Profile ──────────────────────────────────────
+          
           SizedBox(
             width: double.infinity,
             height: 52,
@@ -378,7 +378,7 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
           ),
           16.heightBox,
-          // ── Hospital Request ────────────────────────────────────
+          
           SizedBox(
             width: double.infinity,
             height: 52,
@@ -406,7 +406,7 @@ class _ProfilePageState extends State<ProfilePage> {
             ),
           ),
           16.heightBox,
-          // ── Logout ──────────────────────────────────────────────
+          
           SizedBox(
             width: double.infinity,
             height: 52,
@@ -434,9 +434,9 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  // update profile sheet
+
   void _showUpdateDialog(BuildContext context) {
-    // pre-fill fields
+
     _nameCtrl.text = _name;
     _emailCtrl.text = _email;
     _phoneCtrl.text = _phone;
@@ -462,7 +462,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // handle
+                  
                   Center(
                     child: Container(
                       width: 40,
@@ -571,10 +571,10 @@ class _ProfilePageState extends State<ProfilePage> {
                     height: 50,
                     child: ElevatedButton(
                       onPressed: () async {
-                        // Capture context refs before any await
+
                         final nav = Navigator.of(context);
                         final messenger = ScaffoldMessenger.of(context);
-                        // Get current user to update Firestore
+
                         final user = FirebaseAuth.instance.currentUser;
 
                         setState(() {
@@ -590,7 +590,7 @@ class _ProfilePageState extends State<ProfilePage> {
                           _city = tempCity ?? _city;
                         });
 
-                        // Save locally
+
                         final prefs = await SharedPreferences.getInstance();
                         await prefs.setString('userName', _name);
                         await prefs.setString('userEmail', _email);
@@ -599,7 +599,7 @@ class _ProfilePageState extends State<ProfilePage> {
                           await prefs.setString('userCity', _city!);
                         }
 
-                        // Save to Supabase
+
                         if (user != null) {
                           try {
                             await UserService.instance.update(user.uid, {
@@ -784,7 +784,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     navigator.pop();
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.clear();
-                    // Reveal AuthGate's public home, including from a pushed profile.
+                    // Back to public home.
                     await FirebaseAuth.instance.signOut();
                     if (navigator.mounted) {
                       navigator.popUntil((route) => route.isFirst);

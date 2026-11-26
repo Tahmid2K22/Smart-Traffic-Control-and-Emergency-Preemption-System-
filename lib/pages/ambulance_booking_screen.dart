@@ -141,8 +141,22 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
         accuracy: LocationAccuracy.medium,
         distanceFilter: 50,
       ),
-    );
-    if (!mounted) return;
+    ).catchError((Object _) {
+      // GPS timeout/lock loss must not crash the page on open.
+      return Position(
+        latitude: 0,
+        longitude: 0,
+        timestamp: DateTime.now(),
+        accuracy: double.infinity,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+      );
+    });
+    if (!mounted || position.accuracy.isInfinite) return;
     final point = LatLng(position.latitude, position.longitude);
     setState(() {
       _pickup = point;
@@ -158,7 +172,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   Future<void> _applyMapStyle(GoogleMapController controller) async {
     _mapController = controller;
     final style = await rootBundle.loadString('assets/map_style.json');
-    // Retain this controller API for compatibility with older mobile plugin versions.
+    // Keep for older mobile plugin versions.
     // ignore: deprecated_member_use
     await controller.setMapStyle(style);
   }
@@ -395,23 +409,28 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       return;
     }
 
-    // Show loading overlay
+    
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: AppColors.primary),
+      builder: (_) => PopScope(
+        // Back button must not dismiss: the success path pops this dialog,
+        // and a premature dismiss would pop the booking screen instead.
+        canPop: false,
+        child: const Center(
+          child: CircularProgressIndicator(color: AppColors.primary),
+        ),
       ),
     );
 
     try {
-      // Fetch user profile for name and phone
+      
       final profile = await UserService.instance.fetch(user.uid);
       final userName =
           profile?.displayName ?? user.displayName ?? 'User';
       final userPhone = profile?.phone ?? '';
 
-      // Create request in Supabase
+      
       final requestId = await RequestService.createRequest(
         userFirebaseUid: user.uid,
         userName: userName,
@@ -428,9 +447,9 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       );
 
       if (!mounted) return;
-      Navigator.of(context).pop(); // dismiss loading
+      Navigator.of(context).pop(); 
 
-      // Navigate to tracking page
+      
       Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(
           builder: (_) => TrackingPage(requestId: requestId, isDriver: false),
@@ -438,7 +457,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
       );
     } catch (error) {
       if (!mounted) return;
-      Navigator.of(context).pop(); // dismiss loading
+      Navigator.of(context).pop(); 
       _showMessage(_bookingErrorMessage(error));
     }
   }
@@ -479,7 +498,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
           ),
         ),
       );
-      // Removed simulated ambulance markers
+      
     }
     if (_destination != null && _mode == _BookingMode.planning) {
       markers.add(

@@ -7,7 +7,8 @@
  * 2. DB_URL                         — Firebase console > Realtime Database URL
  * 3. DB_SECRET                      — Project settings > Service accounts >
  *                                     Database secrets (legacy token)
- * 4. INTERSECTION_ID                — any id you like (also used by the app)
+ * 4. INTERSECTION_ID                — the Firestore `intersections` document
+ *                                     id this board controls (e.g. khulna_royal_mor)
  *
  * How it stays cheap on Firebase:
  *  - The board holds ONE persistent SSE stream on the command node.
@@ -45,8 +46,8 @@
  * Safety rules: boot and reconnect start with an all-red clearance, then the
  * board always runs the AUTO cycle (N-E-S-W); at most one direction is ever
  * non-red; direction changes always run yellow -> all-red -> green; police
- * preemption only overrides one colour temporarily; commands older than the
- * last processed one are ignored.
+ * preemption only overrides one colour temporarily; replayed commands with
+ * the same id are ignored.
  *
  * No Wi-Fi = no waiting. The AUTO cycle is started BEFORE Wi-Fi is attempted,
  * so a board with a missing or dead access point still cycles normally. Wi-Fi
@@ -65,49 +66,42 @@
 #include <ArduinoJson.h>
 
 
-#define WIFI_SSID        "Redmi 12"  
-#define WIFI_PASSWORD    "1theke80"
+// ── CONFIGURE LOCALLY BEFORE FLASHING — never commit real credentials ──────
+#define WIFI_SSID        ""           // fill in your 2.4 GHz Wi-Fi locally
+#define WIFI_PASSWORD    ""           // fill in locally; rotate if leaked
 #define DB_URL           "https://e-ambulance-system-001-default-rtdb.firebaseio.com"
-#define DB_SECRET        ""          
-#define INTERSECTION_ID  "khulna_durbar_bangla"
+#define DB_SECRET        ""           // empty: open bench rules (docs/rtdb_traffic_setup.md)
+#define INTERSECTION_ID  "khulna_royal_mor"  // must match the Firestore intersections doc id
 
 #define STATUS_INTERVAL_MS  5000
 
-// Network policy — the lights never wait on the network 
-// Wi-Fi gets a short, BOUNDED window at boot; if it is not up the AUTO cycle
 
-#define WIFI_BOOT_WAIT_MS      8000UL  // max boot wait before AUTO runs alone
-#define NET_CONNECT_TIMEOUT_MS 2000    // TCP connect budget (ms)
+#define WIFI_BOOT_WAIT_MS      8000UL 
+#define NET_CONNECT_TIMEOUT_MS 2000    
 #define NET_HANDSHAKE_SEC      4       // TLS handshake budget (SECONDS)
 #define NET_IO_TIMEOUT_MS      1000    // HTTP / SSE header read budget (ms)
 #define STREAM_RETRY_MS        5000    // back-off after a FAILED connect
 #define STREAM_RECONNECT_MS    1000    // retry after a LIVE stream dropped
 #define NTP_VALID_EPOCH_SEC    1600000000LL  // time() below this = not synced
 
-// ── Traffic light GPIO wiring ───────────────────────────────────────────────
-// 12 LEDs total (4 directions x red/yellow/green), active-HIGH (through a
-// current-limiting resistor, e.g. 220R, to each LED's anode).
-//
-//   Direction | Red  | Yellow | Green
-//   ----------+------+--------+------
-//   North     | GPIO25 | GPIO26 | GPIO27
-//   East      | GPIO14 | GPIO32 | GPIO33
-//   South     | GPIO18 | GPIO19 | GPIO21
-//   West      | GPIO22 | GPIO23 | GPIO13
+//   Direction  Red   Yellow  Green
+//   North      GPIO25  GPIO26  GPIO27
+//   East       GPIO14  GPIO32  GPIO33
+//   South      GPIO18  GPIO19  GPIO21
+//   West       GPIO22  GPIO23  GPIO13
 //
 static const uint8_t LED_PINS[4][3] = {
-  {25, 26, 27},   // north  {red, yellow, green}
-  {14, 32, 33},   // east   {red, yellow, green}
-  {18, 19, 21},   // south  {red, yellow, green}
-  {22, 23, 13},   // west   {red, yellow, green}
+  {25, 26, 27},  
+  {14, 32, 33},  
+  {18, 19, 21},   
+  {22, 23, 13},  
 };
 static const char* const DIR_NAMES[4]   = {"north", "east", "south", "west"};
 static const char* const LIGHT_NAMES[3] = {"red", "yellow", "green"};
 
-static const char* DB_HOST = DB_URL + 8;  // strip "https://"
+static const char* DB_HOST = DB_URL + 8;  
 
-// Path suffix: append "?auth=<secret>" only when a secret is configured.
-// With the open bench rules (docs/rtdb.traffic.rules.json) none is needed.
+
 static void makePath(const char* node, char* out, size_t cap) {
   if (DB_SECRET[0] != 0) {
     snprintf(out, cap, "/traffic/%s/%s.json?auth=%s",
@@ -117,10 +111,8 @@ static void makePath(const char* node, char* out, size_t cap) {
   }
 }
 
-// ── Signal state ────────────────────────────────────────────────────────────
-// The board is ALWAYS in AUTO mode: it boots straight into the cycle (starting
-// from an all-red clearance) and keeps cycling even with no app connected.
-// Police commands only preempt colours temporarily; the cycle resumes after.
+
+// The board is ALWAYS in AUTO mode
 enum Phase : uint8_t { PH_ALL_RED, PH_GREEN, PH_YELLOW };
 
 static Phase    phase    = PH_ALL_RED;
@@ -139,19 +131,13 @@ static size_t   lineLen = 0;
 static char     sseData[600];
 static bool     sseHasData = false;
 
-// ── Emergency escape (ambulance preemption) ──────────────────────────────────
-// Highest priority: the ambulance's approach is held green with every other
-// direction red, frozen until the app sends "release" — automatically when
-// the ambulance leaves the ~1 km ring, or manually by the driver or a
-// traffic officer — or until the watchdog below fires (phone died / network
-// gone). Police clicks and mode toggles are ignored while it is latched.
-//
+
 // The board has no GPS, so the 1 km range check lives in the app; the board
 // only ever acts on the "ambulance" / "release" commands it receives.
-#define AMB_MAX_HOLD_MS 90000UL   // watchdog: never hold a green forever
-static bool     ambActive   = false;  // green frozen for the ambulance
-static bool     ambTransfer = false;  // safe transfer (auto timers) in flight
-static int8_t   ambQueued   = -1;     // arrived mid-transition: apply when free
+#define AMB_MAX_HOLD_MS 90000UL
+static bool     ambActive   = false; 
+static bool     ambTransfer = false;  
+static int8_t   ambQueued   = -1;    
 static int8_t   ambDir      = -1;
 static uint32_t ambStart    = 0;
 
@@ -159,8 +145,7 @@ static uint32_t ambStart    = 0;
 // blocking connect() calls (see the network policy defines above).
 static uint32_t lastStreamAttemptMs = 0;
 static uint32_t lastStatusAttemptMs = 0;
-static uint32_t streamRetryMs = 0;   // 0 lets the very first attempt run at once
-
+static uint32_t streamRetryMs = 0;   
 static void applyAmbulance(int d);
 static void releaseAmbulance();
 
@@ -183,7 +168,7 @@ static int dirIndex(const char* s) {
 
 static void applyOutputs() {
   for (int d = 0; d < 4; ++d) {
-    int light = 0;  // red
+    int light = 0;
     if (d == active) light = (phase == PH_GREEN) ? 2 : (phase == PH_YELLOW ? 1 : 0);
     for (int l = 0; l < 3; ++l) digitalWrite(LED_PINS[d][l], l == light ? HIGH : LOW);
   }
@@ -194,6 +179,7 @@ static void goAllRedIdle() {
   active = -1;
   pending = -1;
   phase = PH_ALL_RED;
+  phaseStart = millis();   // reset timer so allRedMs is measured from NOW
   applyOutputs();
   statusDirty = true;
 }
@@ -297,9 +283,10 @@ static void executeAction(const JsonObject& cmd) {
   }
 
   if (!strcmp(action, "allred") || !strcmp(action, "manual")) {
-    // Force all-red now, then the cycle resumes from the next direction.
+    // Force all-red now, then the cycle resumes from north (goAllRedIdle
+    // cleared `active`, and the AUTO cycle is N-E-S-W).
     goAllRedIdle();
-    pending = (active >= 0) ? (active + 1) % 4 : 0;
+    pending = 0;
     return;
   }
   if (!strcmp(action, "auto")) {
@@ -365,11 +352,11 @@ static void executeAction(const JsonObject& cmd) {
   }
 }
 
-// ── Status upload (PUT; only when changed or on heartbeat) ──────────────────
+//  Status upload (PUT; only when changed or on heartbeat) ──────────────────
 // Returns true when the PUT was actually written. The caller throttles this
 // to once per STATUS_INTERVAL_MS so a dead network can never stall the cycle.
-// Publishing is skipped until NTP has synced: without it `updated` reads
-// 1970 and every client would treat the heartbeat as decades stale.
+// `updated` is 0 until NTP syncs; the app tracks liveness by receive time,
+// so an unsynced clock no longer makes the board look offline.
 static bool publishStatus() {
   if (WiFi.status() != WL_CONNECTED) return false;
 
@@ -477,7 +464,7 @@ static void sseDispatch() {
     return;
   }
   long long id = doc["data"]["id"] | 0LL;  // 0LL: ids are 13-digit timestamps
-  Serial.printf("[traffic] sse data: %s (id=%lld, lastCmdId=%lld)\\n", sseData, id, lastCmdId);
+  Serial.printf("[traffic] sse data: %s (id=%lld, lastCmdId=%lld)\n", sseData, id, lastCmdId);
   if (id == 0) { Serial.println("[traffic] ignoring: id==0"); return; }
   static bool firstPutSeen = false;
   if (!firstPutSeen) {
@@ -490,7 +477,7 @@ static void sseDispatch() {
     }
   }
   if (id == lastCmdId) {
-    Serial.printf("[traffic] ignoring: exact replay (id %lld == lastCmdId)\\n", id);
+    Serial.printf("[traffic] ignoring: exact replay (id %lld == lastCmdId)\n", id);
     return;
   }
   JsonObject data = doc["data"].as<JsonObject>();
@@ -579,7 +566,7 @@ void setup() {
 
   // No command needed: the board ALWAYS starts in AUTO mode. A newer stored
   // command (e.g. custom durations) still applies once the stream connects.
-  publishStatus();  // no-op until Wi-Fi AND NTP are both up
+  publishStatus();  // no-op until Wi-Fi up
 }
 
 void loop() {

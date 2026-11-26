@@ -13,17 +13,9 @@ import '../services/push_notification_service.dart';
 import '../services/traffic_rtdb_service.dart';
 import '../services/traffic_service.dart';
 
-/// Traffic-light control over Firebase Realtime Database.
-///
-/// The officer picks the intersection to control (their assigned one is the
-/// default), sees it on an OpenStreetMap tile and toggles AUTO/MANUAL mode.
-/// In MANUAL the per-direction colour buttons are shown and lights change
-/// only on those clicks; in AUTO the cycle runs on its own. One small write
-/// per tap, no polling.
 class SimpleTrafficPage extends StatefulWidget {
   const SimpleTrafficPage({super.key, this.assignedIntersection});
 
-  /// The officer's assigned intersection (name or id), used as the default.
   final String? assignedIntersection;
 
   @override
@@ -31,16 +23,20 @@ class SimpleTrafficPage extends StatefulWidget {
 }
 
 class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
-  static final _greenCtrl = TextEditingController(text: '30');
-  static final _yellowCtrl = TextEditingController(text: '3');
-  static final _redCtrl = TextEditingController(text: '2');
+  final _greenCtrl = TextEditingController(text: '30');
+  final _yellowCtrl = TextEditingController(text: '3');
+  final _redCtrl = TextEditingController(text: '2');
 
   final _intersectionService = IntersectionService();
+  final _trafficService = TrafficService();
   IntersectionPoint? _selected;
   TrafficRtdbService? _service;
   StreamSubscription<TrafficRtdbState>? _sub;
   StreamSubscription<List<IntersectionPoint>>? _intersectionsSub;
+  StreamSubscription<List<OfficerEscapeAlert>>? _alertsSub;
   List<IntersectionPoint> _intersections = const [];
+  List<OfficerEscapeAlert> _activeAlerts = const [];
+  final Set<String> _announcedAlertIds = <String>{};
   TrafficRtdbState _state = const TrafficRtdbState(
     mode: 'unknown',
     phase: 'unknown',
@@ -74,9 +70,28 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
         }
       }
     });
-    // Register the officer's FCM token so escape requests reach them as
-    // push notifications (token saved on users/{uid}.fcmTokens).
     unawaited(_pushService.registerForCurrentUser());
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isNotEmpty) {
+      _alertsSub = _trafficService.activeAlertsForOfficer(uid).listen((alerts) {
+        if (!mounted) return;
+        OfficerEscapeAlert? newest;
+        for (final alert in alerts) {
+          if (_announcedAlertIds.add(alert.alertId)) {
+            newest ??= alert;
+          }
+        }
+        setState(() => _activeAlerts = alerts);
+        if (newest != null) {
+          unawaited(HapticFeedback.heavyImpact());
+          unawaited(SystemSound.play(SystemSoundType.alert));
+          _notice(
+            '🚑 Escape request: ${newest.driverName} at '
+            '${newest.intersectionName} (${newest.approachDirection.toUpperCase()})',
+          );
+        }
+      }, onError: (Object _) {});
+    }
   }
 
   IntersectionPoint? _resolveAssigned(List<IntersectionPoint>? list) {
@@ -87,7 +102,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
         if (point.name.toLowerCase() == name || point.id == name) return point;
       }
     }
-    // No matching server intersection and no assignment: show no data.
     return null;
   }
 
@@ -120,7 +134,11 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   void dispose() {
     unawaited(_sub?.cancel());
     unawaited(_intersectionsSub?.cancel());
+    unawaited(_alertsSub?.cancel());
     _pushService.dispose();
+    _greenCtrl.dispose();
+    _yellowCtrl.dispose();
+    _redCtrl.dispose();
     super.dispose();
   }
 
@@ -131,7 +149,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Parses a duration field; returns null (and shows an error) if invalid.
   int? _duration(TextEditingController ctrl, String label) {
     final value = int.tryParse(ctrl.text.trim());
     if (value == null || value < 1) {
@@ -169,15 +186,13 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
     }
   }
 
-  /// Manual release by a traffic officer: the light returns to its normal
-  /// AUTO cycle right away (the app also releases automatically once the
-  /// ambulance leaves the ~1 km ring, and the driver can release too).
-  Future<void> _releaseAmbulance() async {
-    if (_releasing) return;
+  Future<void> _releaseAmbulance([String? intersectionId]) async {
+    final targetId = intersectionId ?? _service?.intersectionId;
+    if (_releasing || targetId == null || targetId.isEmpty) return;
     setState(() => _releasing = true);
     try {
-      await TrafficService().releaseEscape(
-        intersectionId: _service!.intersectionId,
+      await _trafficService.releaseEscape(
+        intersectionId: targetId,
         source: EscapeReleaseSource.police,
       );
       _notice('Ambulance priority released — back to AUTO');
@@ -186,6 +201,99 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
     } finally {
       if (mounted) setState(() => _releasing = false);
     }
+  }
+
+  Widget _buildActiveAlertsSection() {
+    if (_activeAlerts.isEmpty) return const SizedBox.shrink();
+    return Column(
+      children: [
+        for (final alert in _activeAlerts) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.red.shade700,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.notifications_active_rounded,
+                        color: Colors.white, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '🚑 Escape alert · ${alert.intersectionName}',
+                        style: GoogleFonts.poppins(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${alert.driverName} approaching from '
+                  '${alert.approachDirection.toUpperCase()}'
+                  '${alert.estimatedArrivalMinutes != null ? ' · ~${alert.estimatedArrivalMinutes} min' : ''}'
+                  '${alert.distanceMeters != null ? ' (${alert.distanceMeters} m)' : ''}',
+                  style: GoogleFonts.poppins(
+                    color: Colors.white.withAlpha(235),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    if (_selected?.id != alert.intersectionId) ...[
+                      for (final point in _intersections)
+                        if (point.id == alert.intersectionId)
+                          TextButton(
+                            onPressed: () => _chooseIntersection(point),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              backgroundColor: Colors.white24,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 6,
+                              ),
+                            ),
+                            child: const Text('View',
+                                style: TextStyle(fontSize: 12)),
+                          ),
+                      const SizedBox(width: 8),
+                    ],
+                    TextButton(
+                      onPressed: _releasing
+                          ? null
+                          : () => _releaseAmbulance(alert.intersectionId),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        backgroundColor: Colors.white24,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                      ),
+                      child: Text(
+                        _releasing ? 'Releasing…' : 'Release',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+      ],
+    );
   }
 
   @override
@@ -203,10 +311,12 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
         ],
       ),
       body: _selected == null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
+          ? ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
+                _buildActiveAlertsSection(),
+                const SizedBox(height: 48),
+                Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(Icons.location_off_rounded,
@@ -228,12 +338,12 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
                     ),
                   ],
                 ),
-              ),
+              ],
             )
           : ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Intersection picker (assigned intersection is the default).
+          _buildActiveAlertsSection(),
           DropdownButtonFormField<IntersectionPoint>(
             initialValue: _selected,
             decoration: const InputDecoration(
@@ -252,7 +362,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
           ),
           const SizedBox(height: 12),
 
-          // OpenStreetMap view of the controlled intersection.
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: SizedBox(
@@ -287,7 +396,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
           ),
           const SizedBox(height: 12),
 
-          // Connection header.
           Row(
             children: [
               Icon(
@@ -307,9 +415,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
             ],
           ),
 
-          // AUTO / MANUAL mode toggle. Selecting AUTO gets all lights to red
-          // and starts the cycle; MANUAL freezes the lights until a colour
-          // button is tapped. Locked while ambulance priority is active.
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('AUTO mode'),
@@ -330,9 +435,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
           ),
           const SizedBox(height: 8),
 
-          // Ambulance priority banner: preemption is latched by a driver
-          // emergency escape; controls stay locked until it is released —
-          // automatically past 1 km, or manually here by the officer.
           if (_state.priority == 'ambulance') ...[
             Container(
               width: double.infinity,
@@ -385,9 +487,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
             const SizedBox(height: 12),
           ],
 
-          // Crossroad view: north / east+west / south. Colour buttons are
-          // shown only in MANUAL mode; in AUTO the cycle runs itself. Hidden
-          // during ambulance priority (the firmware ignores them anyway).
           _Crossroad(
             lights: _state.lights,
             manual:
@@ -401,7 +500,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
           ),
           const SizedBox(height: 16),
 
-          // Phase duration inputs for AUTO mode.
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -463,8 +561,6 @@ class _SimpleTrafficPageState extends State<SimpleTrafficPage> {
   }
 }
 
-/// The four signal heads laid out like a crossroad. Colour buttons are
-/// rendered only in MANUAL mode.
 class _Crossroad extends StatelessWidget {
   const _Crossroad({
     required this.lights,
@@ -505,7 +601,6 @@ class _Crossroad extends StatelessWidget {
     );
   }
 
-  /// Small colour button; disabled while the head already shows that colour.
   Widget _colorButton(String direction, String color, Color fill) {
     final isActive = lights[direction] == color;
     return Padding(
@@ -590,7 +685,6 @@ class _Crossroad extends StatelessWidget {
   }
 }
 
-/// Seconds input; any positive value is accepted (no upper limit).
 class _DurationField extends StatelessWidget {
   const _DurationField({
     required this.controller,

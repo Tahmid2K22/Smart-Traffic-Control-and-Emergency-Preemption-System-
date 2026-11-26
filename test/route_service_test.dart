@@ -7,7 +7,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 void main() {
   group('decodePolyline', () {
     test('decodes the canonical example', () {
-      // Classic sample from the Google polyline docs.
+      // Sample from the Google polyline docs.
       final points = RouteService.decodePolyline('_p~iF~ps|U_ulLnnqC');
       expect(points, hasLength(2));
       expect(points[0].latitude, closeTo(38.5, 1e-5));
@@ -22,7 +22,7 @@ void main() {
         LatLng(22.9000001, 89.5012345),
         LatLng(22.8123456, 89.562265625),
       ];
-      // Re-encode with the standard algorithm to round-trip the decoder.
+      // Re-encode with standard algorithm to round-trip the decoder.
       final encoded = _encode(original);
       final decoded = RouteService.decodePolyline(encoded);
       expect(decoded, hasLength(original.length));
@@ -34,8 +34,7 @@ void main() {
   });
 
   group('locate (along-route math)', () {
-    // A straight 3-point route heading due north from (22.90, 89.50),
-    // 1000 m per segment.
+    // Straight 3-point route heading north from (22.90, 89.50), 1000 m per segment.
     final route = [
       const LatLng(22.90, 89.50),
       const LatLng(22.90 + 1000 / 111320, 89.50),
@@ -81,12 +80,12 @@ void main() {
 }
 
 extension on LatLng {
-  /// Moves [meters] due north (used to build deterministic fixtures).
+  /// Moves [meters] due north for deterministic fixtures.
   LatLng plusNorth(double meters) =>
       LatLng(latitude + meters / 111320, longitude);
 }
 
-/// Minimal reference encoder (standard polyline algorithm) for round-trips.
+/// Reference encoder (standard polyline) for round-trips.
 String _encode(List<LatLng> points) {
   String encodeValue(int value) {
     var v = value < 0 ? ~(value << 1) : (value << 1);

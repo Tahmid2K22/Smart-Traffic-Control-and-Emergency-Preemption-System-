@@ -56,7 +56,7 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
 
   @override
   void dispose() {
-    // The caller retains ownership of an injected service.
+    // Injected service owned by caller.
     if (widget.placesApi == null) _placesApi.dispose();
     super.dispose();
   }
@@ -153,7 +153,7 @@ class _NearbyPlacesPageState extends State<NearbyPlacesPage> {
             );
           }
         } catch (_) {
-          // API/OSM results remain available if Firestore is unavailable.
+          // OSM results stay if Firestore down.
         }
       }
 

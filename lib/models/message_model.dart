@@ -1,5 +1,3 @@
-// Dart model that maps to the Supabase `messages` table.
-
 enum SenderRole {
   user,
   driver;

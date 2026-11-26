@@ -51,7 +51,7 @@ class PlacesApiService {
 
   bool get isConfigured => true;
 
-  /// Injected clients remain the caller's responsibility.
+  /// Caller owns injected clients.
   void dispose() {
     if (_ownsClient) _client.close();
   }
@@ -63,7 +63,7 @@ class PlacesApiService {
     final trimmed = input.trim();
     if (trimmed.length < 2) return const [];
 
-    // 1. Try Google Places Native Channel
+    // Try native Google Places first.
     try {
       final raw = await _channel.invokeMethod<List<dynamic>>(
         'autocomplete',
@@ -86,7 +86,7 @@ class PlacesApiService {
       if (list.isNotEmpty) return list;
     } catch (_) {}
 
-    // 2. Fallback to OpenStreetMap Nominatim
+    // Fallback: Nominatim.
     try {
       final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
         'format': 'json',
@@ -130,11 +130,8 @@ class PlacesApiService {
     }
   }
 
-  /// Finds hospitals or pharmacies within the fixed 15 km search radius.
-  ///
-  /// [radiusMeters] is retained for call-site compatibility, but does not change
-  /// the radius. Empty/failed native searches consult OSM; OSM failures throw
-  /// rather than being presented as an empty search or fabricated places.
+  /// Finds hospitals/pharmacies within fixed 15 km. radiusMeters kept for compat only.
+  /// Empty/failed native searches fall back to OSM; OSM failures throw.
   Future<List<NearbyPlaceResult>> nearby({
     required LatLng center,
     required String type,

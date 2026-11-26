@@ -74,13 +74,13 @@ class _HomePageState extends State<HomePage> {
     if (user == null) return;
     var name = user.displayName?.trim() ?? '';
     try {
-      // Profile data lives in Supabase; notifications stay in Firestore.
+      // Profile in Supabase; notifications in Firestore.
       final profile = await UserService.instance.fetch(user.uid);
       if (profile != null && profile.displayName.trim().isNotEmpty) {
         name = profile.displayName.trim();
       }
     } catch (_) {
-      // Auth profile data remains a reliable fallback.
+      // Fall back to auth profile.
     }
     try {
       final unread = await FirebaseFirestore.instance
@@ -90,7 +90,7 @@ class _HomePageState extends State<HomePage> {
           .get();
       if (mounted) _unreadNotifications = unread.size;
     } on FirebaseException {
-      // Notifications are optional; never block the dashboard on them.
+      // Notifications optional; don't block dashboard.
     }
     if (!mounted) return;
     final safeName = name.isEmpty ? 'User' : name;
@@ -133,7 +133,7 @@ class _HomePageState extends State<HomePage> {
         setState(() => _region = area);
       }
     } catch (e) {
-      // Catch all errors to prevent red screen when geocoding is unavailable
+      // Avoid red screen if geocoding unavailable.
     }
   }
 
@@ -153,7 +153,9 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _callEmergency() async {
     final uri = Uri(scheme: 'tel', path: '999');
-    if (!await launchUrl(uri)) _showMessage('Unable to open the phone dialer.');
+    if (!await launchUrl(uri) && mounted) {
+      _showMessage('Unable to open the phone dialer.');
+    }
   }
 
   void _showMessage(String message) => ScaffoldMessenger.of(context)

@@ -17,9 +17,12 @@ class _DriversManagementPageState extends State<DriversManagementPage>
     with SingleTickerProviderStateMixin {
   final _adminService = AdminService();
   late final TabController _tabs;
+  // One stream for the page's lifetime; re-creating it on every build
+  // resubscribes and flashes the spinner on every tab switch.
+  late final Stream<List<UserProfile>> _driverStream =
+      UserService.instance.watchUsers(roles: const ['driver']);
 
-  // 0 = All, 1 = Pending, 2 = Verified, 3 = Rejected
-  static const _filters = ['All', 'Pending', 'Verified', 'Rejected'];
+  static const _filters = ['All', 'Pending', 'Verified'];
 
   @override
   void initState() {
@@ -39,16 +42,11 @@ class _DriversManagementPageState extends State<DriversManagementPage>
 
   int _filterIndex = 0;
 
-  Stream<List<UserProfile>> _buildStream() {
-    return UserService.instance.watchUsers(roles: const ['driver']);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Top navbar — same design as the Hospitals panel.
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
           child: Container(
@@ -74,10 +72,9 @@ class _DriversManagementPageState extends State<DriversManagementPage>
             ),
           ),
         ),
-        // Driver list
         Expanded(
           child: StreamBuilder<List<UserProfile>>(
-            stream: _buildStream(),
+            stream: _driverStream,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
@@ -92,9 +89,6 @@ class _DriversManagementPageState extends State<DriversManagementPage>
                   break;
                 case 2:
                   docs = docs.where((u) => u.isApproved).toList();
-                  break;
-                case 3:
-                  docs = docs.where((u) => !u.isApproved).toList();
                   break;
                 default:
                   break;
@@ -151,7 +145,6 @@ class _DriversManagementPageState extends State<DriversManagementPage>
   }
 }
 
-// driver card widget
 class _DriverCard extends StatefulWidget {
   final String uid;
   final Map<String, dynamic> data;
@@ -253,7 +246,6 @@ class _DriverCardState extends State<_DriverCard> {
       ),
       child: Column(
         children: [
-          // top color indicator bar
           Container(
             height: 2,
             decoration: BoxDecoration(
@@ -268,7 +260,6 @@ class _DriverCardState extends State<_DriverCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // header info
                 Row(
                   children: [
                     Container(
@@ -334,7 +325,6 @@ class _DriverCardState extends State<_DriverCard> {
                   child: Divider(height: 1, color: Color(0xFFEFEFEF)),
                 ),
 
-                // city and license
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -393,7 +383,6 @@ class _DriverCardState extends State<_DriverCard> {
 
                 14.heightBox,
 
-                // vehicle details
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -420,7 +409,6 @@ class _DriverCardState extends State<_DriverCard> {
 
                 14.heightBox,
 
-                // action buttons
                 if (_loading)
                   const Center(
                       child: SizedBox(

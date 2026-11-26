@@ -198,7 +198,7 @@ void main() {
       expect(settings['accuracy'], LocationAccuracy.high.index);
       expect(api.requests, hasLength(1));
       expect(api.requests.single.center, _center);
-      // The plugin enforces timeLimit in Dart, not in its platform arguments.
+      // The plugin enforces timeLimit in Dart, not platform args.
     },
   );
 

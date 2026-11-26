@@ -1,11 +1,11 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
- /// Call `await AppConfig.load();` inside `main()` before any other init.
+ /// Call AppConfig.load() in main() before other init.
 
 class AppConfig {
   AppConfig._();
 
-  /// Loads the .env asset. Must be called once at app startup.
+  /// Loads .env; call once at startup.
   static Future<void> load() => dotenv.load(fileName: '.env');
 
   static String get googleMapsApiKey => _required('GOOGLE_MAPS_API_KEY');

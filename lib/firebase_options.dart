@@ -4,16 +4,7 @@ import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 
-/// Default [FirebaseOptions] for use with your Firebase apps.
-///
-/// Example:
-/// ```dart
-/// import 'firebase_options.dart';
-/// // ...
-/// await Firebase.initializeApp(
-///   options: DefaultFirebaseOptions.currentPlatform,
-/// );
-/// ```
+/// Default [FirebaseOptions] for your Firebase apps.
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
@@ -51,12 +42,9 @@ class DefaultFirebaseOptions {
     storageBucket: 'e-ambulance-system-001.firebasestorage.app',
   );
 
-  // NOTE: Do NOT add `databaseURL` here. On Android/iOS the native default
-  // app is created from google-services.json / GoogleService-Info.plist
-  // *before* Dart runs; passing options that differ from it makes
-  // `Firebase.initializeApp` throw `[core/duplicate-app]`, which aborts
-  // main() and shows up as a blank white screen. Realtime Database is reached
-  // via `TrafficRtdbService`, which passes its URL explicitly.
+  // NOTE: no databaseURL here. Native default app is created before Dart runs;
+  // mismatched options throw [core/duplicate-app] and blank the screen. RTDB
+  // is reached via TrafficRtdbService, which passes its URL explicitly.
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCkCKYfSLBEj4wLZUDOVCX4hIiauka2K9c',
     appId: '1:261691548059:android:9ba6cdf7fdd8a32c1f013e',

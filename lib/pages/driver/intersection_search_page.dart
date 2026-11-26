@@ -51,7 +51,6 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
       _locationGeneration++;
       _positionSub?.cancel();
       _positionSub = null;
-      // Do not enable requests using a position cached before leaving the app.
       setState(() {
         _position = null;
         _locating = false;
@@ -201,8 +200,6 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
     }
     setState(() => _sendingId = intersection.id);
     try {
-      // The service obtains fresh GPS, revalidates driver and range, then
-      // preempts the light directly — no assigned officer is required.
       final result = await _trafficService.requestEmergencyEscape(
         intersectionId: intersection.id,
         dispatchId: _dispatchId,
@@ -247,8 +244,6 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Manual release by the driver: the light goes back to its normal cycle
-  /// immediately (the app also releases automatically past 1 km).
   Future<void> _releaseEscape() async {
     final escape = TrafficService.activeEscape.value;
     if (escape == null || _releasing) return;
@@ -615,7 +610,12 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: inRange && _hasActiveRide && _sendingId == null
+              onPressed: inRange &&
+                      _hasActiveRide &&
+                      _sendingId == null &&
+                      (TrafficService.activeEscape.value == null ||
+                          TrafficService.activeEscape.value!.intersectionId ==
+                              intersection.id)
                   ? () => _requestEscape(intersection)
                   : null,
               style: FilledButton.styleFrom(
@@ -639,12 +639,20 @@ class _IntersectionSearchPageState extends State<IntersectionSearchPage>
               label: Text(sending ? 'Sending…' : 'Request emergency escape'),
             ),
           ),
-          if (!inRange || !_hasActiveRide)
+          if (!inRange || !_hasActiveRide ||
+              (TrafficService.activeEscape.value != null &&
+                  TrafficService.activeEscape.value!.intersectionId !=
+                      intersection.id))
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
                 !_hasActiveRide
                     ? 'Accept a ride to request an escape.'
+                    : TrafficService.activeEscape.value != null &&
+                          TrafficService.activeEscape.value!.intersectionId !=
+                              intersection.id
+                    ? 'Release the active escape at '
+                        '${TrafficService.activeEscape.value!.intersectionName} first.'
                     : distance == null
                     ? 'Enable live location to request.'
                     : 'Move within 1 km to request.',

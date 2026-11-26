@@ -6,14 +6,8 @@ import 'package:http/http.dart' as http;
 
 import '../constants/app_config.dart';
 
-/// Full driving route from the Google Directions API with along-route math
-/// used by the emergency signal priority trigger.
-///
-/// The trigger asks "is a controlled junction ON the ambulance's planned
-/// path, less than N metres of driving ahead?" — which a straight-line
-/// radius cannot answer (a junction across a river 400 m away but 4 km by
-/// road must never trigger; one 1 km away by road but 300 m as the crow
-/// flies must not trigger too early either).
+/// Driving route from Google Directions + along-route math for signal trigger.
+/// Straight-line radius can't answer "junction on path within N m ahead".
 class RouteService {
   RouteService({http.Client? client})
     : _client = client ?? http.Client(),
@@ -22,9 +16,7 @@ class RouteService {
   final http.Client _client;
   final bool _ownsClient;
 
-  /// Fetches the full route geometry (all steps of all legs concatenated,
-  /// i.e. unsimplified). Throws on any failure — callers fall back to the
-  /// plain radius geofence.
+  /// Full route geometry (all steps/legs). Throws on failure; callers fall back to radius geofence.
   Future<List<LatLng>> fetchRoutePoints({
     required LatLng origin,
     required LatLng destination,
@@ -36,7 +28,7 @@ class RouteService {
       'region': 'bd',
       'key': AppConfig.googleMapsApiKey,
     });
-    final response = await http.get(uri).timeout(const Duration(seconds: 15));
+    final response = await _client.get(uri).timeout(const Duration(seconds: 15));
     if (response.statusCode != 200) {
       throw HttpException('Google Directions returned ${response.statusCode}.');
     }
@@ -83,7 +75,7 @@ class RouteService {
     return points;
   }
 
-  /// Decodes a Google encoded polyline (precision 1e5) into lat/lng points.
+  /// Decode Google encoded polyline (1e5) to lat/lng.
   static List<LatLng> decodePolyline(String encoded) {
     final points = <LatLng>[];
     var index = 0;
@@ -115,13 +107,7 @@ class RouteService {
     return points;
   }
 
-  /// Locates [position] relative to the polyline [route].
-  ///
-  /// Returns the distance travelled along the route up to the closest point
-  /// ([alongMeters]) and the perpendicular distance to the route
-  /// ([crossMeters]). Coordinates are projected equirectangularly around the
-  /// route's mean latitude — ample accuracy at city scale (metre-level
-  /// error well below GPS noise).
+  /// Position relative to route: alongMeters + crossMeters (equirectangular projection; city-scale accurate).
   static ({double alongMeters, double crossMeters}) locate({
     required List<LatLng> route,
     required LatLng position,

@@ -1,8 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// Returns true only when Supabase has been successfully initialised.
-/// Use this guard before every Supabase call so the app never crashes
-/// when the user hasn't configured their Supabase keys yet.
+/// True when Supabase is initialised. Guard calls with this.
 bool get supabaseReady {
   try {
     Supabase.instance.client; // throws StateError if not initialised
@@ -12,10 +10,10 @@ bool get supabaseReady {
   }
 }
 
-/// Convenient accessor — only call after checking [supabaseReady].
+/// Supabase client accessor (check [supabaseReady] first).
 SupabaseClient get sb => Supabase.instance.client;
 
-/// Table name constants — avoids hard-coded strings throughout the codebase.
+/// Table name constants.
 class SupabaseTables {
   SupabaseTables._();
   static const String drivers     = 'drivers';

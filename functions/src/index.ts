@@ -1,26 +1,16 @@
-/**
- * Cloud Functions for the ambulance dashboard.
- *
- *  - placesAutocomplete / placeDetails / nearbyPlaces:
- *      Google Places proxy callables (secrets-based, App Check enforced).
- *  - notifyEmergencyEscape:
- *      Firestore trigger. When an EMERGENCY_ESCAPE alert is created it sends
- *      an FCM push to every verified, active traffic police officer assigned
- *      to the target intersection (matched by assignedIntersectionId or by
- *      the assigned intersection name). Tokens live on
- *      `users/{uid}.fcmTokens` and are registered by the officer app
- *      (PushNotificationService).
- */
+/** Cloud Functions: Places proxies + emergency-escape FCM push. */
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
-import { defineSecret } from 'firebase-functions/params';
+import { defineSecret, defineString } from 'firebase-functions/params';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 
 initializeApp();
 
 const googlePlacesApiKey = defineSecret('GOOGLE_PLACES_API_KEY');
+const supabaseUrlParam = defineString('SUPABASE_URL');
+const supabaseServiceRoleKey = defineSecret('SUPABASE_SERVICE_ROLE_KEY');
 const placesBaseUrl = 'https://places.googleapis.com/v1';
 const maxRadiusMeters = 30000;
 
@@ -162,8 +152,18 @@ function tokenMapKeys(value: unknown): string[] {
   return Object.keys(value as Record<string, unknown>);
 }
 
+interface SupabaseOfficerRow {
+  assigned_intersection_id?: unknown;
+  assigned_intersection?: unknown;
+  fcm_tokens?: unknown;
+}
+
 export const notifyEmergencyEscape = onDocumentCreated(
-  'emergency_alerts/{alertId}',
+  {
+    document: 'emergency_alerts/{alertId}',
+    region: 'us-central1',
+    secrets: [supabaseServiceRoleKey],
+  },
   async (event) => {
     const alert = (event.data?.data() ?? {}) as EscapeAlert;
     if (alert.type !== 'EMERGENCY_ESCAPE') return;
@@ -176,35 +176,43 @@ export const notifyEmergencyEscape = onDocumentCreated(
         : typeof alert.intersection === 'string'
           ? alert.intersection
           : '';
-    // Only the PRIMARY escape record (officerId '') triggers pushes — each
-    // per-officer duplicate doc would otherwise fan out again per officer.
+    // Only primary record (officerId '') triggers pushes.
     if (typeof alert.officerId === 'string' && alert.officerId !== '') return;
     if (!intersectionId && !intersectionName) return;
 
-    const supabaseUrl = process.env.SUPABASE_URL ?? '';
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
-    let officers: Array<{ assignedIntersectionId?: unknown; assignedIntersection?: unknown; fcmTokens?: unknown }> = [];
-    if (supabaseUrl && serviceKey) {
-      try {
-        const res = await fetch(`${supabaseUrl}/rest/v1/users?select=assigned_intersection_id,assigned_intersection,fcm_tokens&role=eq.traffic_police&is_verified=eq.true&is_active=eq.true`, {
-          headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
-        });
-        if (res.ok) {
-          officers = await res.json();
-        }
-      } catch (error) {
-        console.error('Supabase officer lookup failed:', error);
-      }
+    const supabaseUrl = (supabaseUrlParam.value() || process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+    const serviceKey = (supabaseServiceRoleKey.value() || process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+    if (!supabaseUrl || !serviceKey) {
+      console.warn('Supabase credentials not configured for notifyEmergencyEscape; skipping officer lookup.');
+      return;
     }
+
+    let officers: SupabaseOfficerRow[] = [];
+    try {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/users?select=assigned_intersection_id,assigned_intersection,fcm_tokens&role=eq.traffic_police&is_verified=eq.true`,
+        {
+          headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+        }
+      );
+      if (res.ok) {
+        officers = await res.json();
+      } else {
+        console.error(`Supabase officer lookup returned HTTP ${res.status}`);
+      }
+    } catch (error) {
+      console.error('Supabase officer lookup failed:', error);
+    }
+
     const tokens: string[] = [];
     for (const data of officers) {
       const assignedId =
-        typeof data.assignedIntersectionId === 'string'
-          ? data.assignedIntersectionId
+        typeof data.assigned_intersection_id === 'string'
+          ? data.assigned_intersection_id
           : '';
       const assignedName =
-        typeof data.assignedIntersection === 'string'
-          ? data.assignedIntersection.trim().toLowerCase()
+        typeof data.assigned_intersection === 'string'
+          ? data.assigned_intersection.trim().toLowerCase()
           : '';
       const matches =
         (intersectionId !== '' && assignedId === intersectionId) ||
@@ -212,7 +220,7 @@ export const notifyEmergencyEscape = onDocumentCreated(
           assignedName !== '' &&
           assignedName === intersectionName.toLowerCase());
       if (!matches) continue;
-      tokens.push(...tokenMapKeys(data.fcmTokens));
+      tokens.push(...tokenMapKeys(data.fcm_tokens));
     }
     if (tokens.length === 0) return;
 
@@ -264,8 +272,7 @@ export const notifyEmergencyEscape = onDocumentCreated(
       console.error('FCM push failed:', error);
     }
 
-    // Stamp the primary record (this trigger's doc IS the primary) so the
-    // driver / dashboards can see that pushes were attempted.
+    // Stamp primary record so dashboards see pushes were attempted.
     await getFirestore().collection('emergency_alerts').doc(event.params.alertId).update({
       pushSentAt: FieldValue.serverTimestamp(),
       pushRecipientCount: tokens.length,

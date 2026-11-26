@@ -6,35 +6,26 @@ import 'package:flutter/foundation.dart';
 
 import 'user_service.dart';
 
-/// Registers the signed-in officer's FCM token on their user document so the
-/// `notifyEmergencyEscape` Cloud Function can push escape requests to them.
-///
-/// Token map shape (`users/{uid}.fcmTokens`):
-///   `{ '<token>': { 'platform': 'android'|'ios', 'updatedAt': <ts> } }`
-///
-/// Push is Android/iOS only — on desktop/web this service is a no-op so the
-/// app never touches an unsupported plugin.
+/// Registers the signed-in officer's FCM token for escape-request pushes.
+/// Token map: Supabase `users.fcm_tokens` = `{token: {platform, updatedAt}}`.
 class PushNotificationService {
   PushNotificationService({FirebaseAuth? auth})
     : _auth = auth ?? FirebaseAuth.instance;
 
-  /// Lazily created only on supported platforms (see [isSupported]).
+  /// Lazily created on supported platforms.
   FirebaseMessaging? _messaging;
   final FirebaseAuth _auth;
   StreamSubscription<String>? _tokenRefreshSub;
+  StreamSubscription<RemoteMessage>? _foregroundSub;
   bool _registering = false;
 
-  /// FCM messaging is only wired for Android and iOS. Web/desktop builds skip
-  /// it entirely (the officer still receives alerts through the in-app
-  /// Firestore stream).
+  /// FCM only on Android/iOS; web/desktop skip (alerts via in-app stream).
   static bool get isSupported =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
-  /// Requests notification permission and stores/refreshes the FCM token for
-  /// the signed-in user. Safe to call from a page's initState; failures are
-  /// non-fatal (the officer still sees alerts via the in-app stream).
+  /// Requests permission and stores/refreshes the FCM token. Safe from initState; failures non-fatal.
   Future<void> registerForCurrentUser() async {
     if (!isSupported) return;
     if (_registering) return;
@@ -55,10 +46,9 @@ class PushNotificationService {
         (token) => _saveToken(user.uid, token),
         onError: (Object _) {}, // token stays stale; next launch re-registers
       );
-      // Foreground display: system-tray notifications only appear when the
-      // app is backgrounded; foreground alerts are already shown by the
-      // officer page's Firestore stream. Keep a no-op logging listener.
-      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      _foregroundSub?.cancel();
+      // Foreground: tray only when backgrounded; officer page shows alerts. No-op log listener.
+      _foregroundSub = FirebaseMessaging.onMessage.listen((RemoteMessage message) {
         if (kDebugMode) {
           // ignore: avoid_print
           print('[push] foreground message: '
@@ -67,8 +57,7 @@ class PushNotificationService {
         }
       });
     } catch (error) {
-      // MissingPluginException / UnimplementedError / permission errors must
-      // never take down the officer page.
+      // Plugin/permission errors must not take down the officer page.
       if (kDebugMode) {
         // ignore: avoid_print
         print('[push] registration failed: $error');
@@ -92,5 +81,7 @@ class PushNotificationService {
   void dispose() {
     _tokenRefreshSub?.cancel();
     _tokenRefreshSub = null;
+    _foregroundSub?.cancel();
+    _foregroundSub = null;
   }
 }
