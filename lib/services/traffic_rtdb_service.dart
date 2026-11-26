@@ -3,16 +3,8 @@ import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 
-/// Simple traffic-light control over Firebase Realtime Database.
-///
-/// Firebase usage stays minimal:
-///  - the app never polls; it listens to `status` (one stream),
-///  - the app writes only when a button is pressed,
-///  - the ESP32 holds the command node open with a single SSE stream.
-///
-/// Data model (see the sketch header for the full contract):
-///   `traffic/<intersectionId>/command` — app writes, ESP32 consumes
-///   `traffic/<intersectionId>/status`  — ESP32 writes, app listens
+/// Traffic-light control over RTDB. App listens to `status`, writes on button press; ESP32 consumes `command`.
+/// `traffic/<id>/command` (app→board), `traffic/<id>/status` (board→app).
 
 class TrafficRtdbState {
   const TrafficRtdbState({
@@ -29,15 +21,13 @@ class TrafficRtdbState {
   final Map<String, String> lights;
   final String priority; // 'ambulance' while preemption is latched, else ''
   final DateTime? updated;
-  /// Local time the last status event was received — used for liveness so a
-  /// board whose clock is unsynced (updated == 0/epoch) is not shown offline.
+  /// Last status received locally (liveness; unsynced board clocks).
   final DateTime? receivedAt;
 
-  /// Colour the given approach arm currently shows ('red'|'yellow'|'green').
+  /// Colour of an approach arm ('red'|'yellow'|'green').
   String lightFor(String direction) => lights[direction] ?? 'unknown';
 
-  /// True when the board reports the ambulance preemption latch is active
-  /// AND its heartbeat is recent (board online).
+  /// Last time used for liveness (receivedAt ?? updated).
   DateTime get _livenessTime => receivedAt ?? updated ?? DateTime.now();
 
   bool get ambulanceLatched =>
@@ -69,18 +59,16 @@ class TrafficRtdbState {
     );
   }
 
-  /// The board reports a heartbeat every ~5 s; older than 15 s = offline.
+  /// Heartbeat every ~5s; older than 15s = offline.
   bool get isFresh =>
       DateTime.now().difference(_livenessTime) <= const Duration(seconds: 15);
 }
 
 class TrafficRtdbService {
-  /// Must match INTERSECTION_ID in the ESP32 sketch for the intersection.
+  /// Must match INTERSECTION_ID in the ESP32 sketch.
   static const String defaultIntersectionId = 'khulna_royal_mor';
 
-  /// Must match DB_URL in `traffic_light_firmware.ino`. Passing it explicitly
-  /// means commands work even if a platform config lacks `databaseURL`
-  /// (which was why the board never received commands before).
+  /// Must match DB_URL in firmware; passed explicitly so commands work without platform databaseURL.
   static const String databaseUrl =
       'https://e-ambulance-system-001-default-rtdb.firebaseio.com';
 
@@ -97,7 +85,7 @@ class TrafficRtdbService {
 
   DatabaseReference get _ref => _db.ref('traffic/$intersectionId');
 
-  /// Live status from the board.
+  /// Live status stream from the board.
   Stream<TrafficRtdbState> get statusStream =>
       _ref.child('status').onValue.map((event) {
         final value = event.snapshot.value;
@@ -111,8 +99,7 @@ class TrafficRtdbService {
         );
       });
 
-  /// One-shot status read — used to confirm the board actually received and
-  /// applied a command (the command write itself gives no acknowledgement).
+  /// One-shot status read (command writes give no ack).
   Future<TrafficRtdbState?> readStatus() async {
     final snapshot = await _ref.child('status').get();
     final value = snapshot.value;
@@ -120,8 +107,7 @@ class TrafficRtdbService {
     return null;
   }
 
-  /// Police preemption: force one direction to a specific colour
-  /// ('green', 'yellow' or 'red'). Safety rules live in the firmware.
+  /// Police preemption: force a direction to a colour ('green'/'yellow'/'red'); safety in firmware.
   Future<void> setColor(String direction, String color) => _send({
         'action': 'set',
         'direction': direction,
@@ -129,27 +115,22 @@ class TrafficRtdbService {
         'id': ServerValue.timestamp,
       });
 
-  /// Toggles the board between AUTO cycle and MANUAL (click-only) mode.
-  /// Turning AUTO on gets every light to red, then starts the N-E-S-W cycle.
+  /// Toggle AUTO/MANUAL mode (AUTO resets to red then cycles N-E-S-W).
   Future<void> setMode(bool autoOn) =>
       _send({'action': autoOn ? 'auto' : 'manual', 'id': ServerValue.timestamp});
 
-  /// Driver emergency preemption: forces the board into MANUAL-style control
-  /// with the ambulance's approach green and everything else red, frozen
-  /// until [releaseAmbulance]. Highest priority — police commands are
-  /// ignored by the firmware while it is latched.
+  /// Emergency preemption: approach green, rest red, frozen until release. Highest priority.
   Future<void> ambulancePreempt(String direction) => _send({
         'action': 'ambulance',
         'direction': direction,
         'id': ServerValue.timestamp,
       });
 
-  /// Ends the ambulance preemption; the board returns to the AUTO cycle.
+  /// End preemption; board returns to AUTO.
   Future<void> releaseAmbulance() =>
       _send({'action': 'release', 'id': ServerValue.timestamp});
 
-  /// Starts the auto cycle with the given phase durations in seconds.
-  /// Any positive value is accepted (no upper limit).
+  /// Start auto cycle with phase durations (any positive value).
   Future<void> auto({int greenSec = 3, int yellowSec = 3, int allRedSec = 3}) =>
       _send({
         'action': 'auto',

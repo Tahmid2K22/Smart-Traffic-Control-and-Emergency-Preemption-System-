@@ -1,8 +1,5 @@
-// Dart models that map to the Supabase PostgreSQL tables.
-
-// ──────────────────────────────────────────────────────────────────────────────
 // Request status
-// ──────────────────────────────────────────────────────────────────────────────
+
 enum RequestStatus {
   pending,
   accepted,
@@ -45,9 +42,8 @@ enum RequestStatus {
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// AmbulanceRequest  ←→  requests table
-// ──────────────────────────────────────────────────────────────────────────────
+// AmbulanceRequest ↔ requests table
+
 class AmbulanceRequest {
   final String id;
   final String userFirebaseUid;
@@ -117,12 +113,13 @@ class AmbulanceRequest {
       distanceKm:         (map['distance_km'] as num).toDouble(),
       userName:           map['user_name'] as String,
       userPhone:          map['user_phone'] as String,
-      createdAt:          DateTime.parse(map['created_at'] as String),
+      // Timestamps come back as UTC instants; convert so callers render local wall-clock.
+      createdAt:          DateTime.parse(map['created_at'] as String).toLocal(),
       acceptedAt:         map['accepted_at'] != null
-                            ? DateTime.parse(map['accepted_at'] as String)
+                            ? DateTime.parse(map['accepted_at'] as String).toLocal()
                             : null,
       completedAt:        map['completed_at'] != null
-                            ? DateTime.parse(map['completed_at'] as String)
+                            ? DateTime.parse(map['completed_at'] as String).toLocal()
                             : null,
       driverName:         driver?['name'] as String?,
       driverPhone:        driver?['phone'] as String?,
@@ -152,9 +149,8 @@ class AmbulanceRequest {
   };
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// DriverProfile  ←→  drivers table
-// ──────────────────────────────────────────────────────────────────────────────
+// DriverProfile ↔ drivers table
+
 class DriverProfile {
   final String id; // uuid
   final String firebaseUid;

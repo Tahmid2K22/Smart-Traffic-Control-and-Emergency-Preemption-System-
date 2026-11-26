@@ -10,6 +10,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../models/intersection_point.dart';
 import 'overpass_signal_service.dart';
 import 'request_service.dart';
+import 'supabase_service.dart';
 import 'traffic_rtdb_service.dart';
 import 'user_service.dart';
 
@@ -31,12 +32,7 @@ enum EscapeReleaseSource {
   };
 }
 
-/// An emergency escape that is currently latching a traffic light green.
-///
-/// The board has no GPS, so the "leave the 1 km ring" check lives here: the
-/// app watches the ambulance's position and sends `release` as soon as it is
-/// back outside [IntersectionPoint.escapeRequestRadiusMeters]. The same
-/// release path is used for a manual release by the driver or an officer.
+/// An escape currently latching a light green; app handles the 1 km release.
 class ActiveEscape {
   const ActiveEscape({
     required this.intersectionId,
@@ -72,8 +68,7 @@ class EmergencyEscapeResult {
     this.boardOnline = false,
   });
 
-  /// Officers assigned to the intersection that were recorded for
-  /// notification. May be zero — the light command does not depend on them.
+    /// Officers notified (may be zero; light command is independent).
   final int officersNotified;
 
   /// Approach arm sent to the light ('north' | 'east' | 'south' | 'west').
@@ -93,6 +88,57 @@ class EmergencyEscapeResult {
   final bool boardOnline;
 }
 
+/// Active emergency escape alert targeted at a signed-in traffic officer.
+class OfficerEscapeAlert {
+  const OfficerEscapeAlert({
+    required this.alertId,
+    required this.intersectionId,
+    required this.intersectionName,
+    required this.driverName,
+    required this.approachDirection,
+    this.distanceMeters,
+    this.estimatedArrivalMinutes,
+    this.requestedAt,
+  });
+
+  final String alertId;
+  final String intersectionId;
+  final String intersectionName;
+  final String driverName;
+  final String approachDirection;
+  final int? distanceMeters;
+  final int? estimatedArrivalMinutes;
+  final DateTime? requestedAt;
+
+  static OfficerEscapeAlert fromDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data();
+    final requested = data['requestedAt'];
+    final intersection =
+        (data['intersectionName'] as String?)?.trim().isNotEmpty == true
+        ? (data['intersectionName'] as String).trim()
+        : ((data['intersection'] as String?)?.trim() ?? 'Intersection');
+    final driver = (data['driverName'] as String?)?.trim();
+    final direction = (data['approachDirection'] as String?)?.trim();
+    return OfficerEscapeAlert(
+      alertId: doc.id,
+      intersectionId: (data['intersectionId'] as String?) ?? '',
+      intersectionName: intersection,
+      driverName: (driver != null && driver.isNotEmpty)
+          ? driver
+          : 'Ambulance driver',
+      approachDirection: (direction != null && direction.isNotEmpty)
+          ? direction
+          : 'unknown',
+      distanceMeters: (data['distanceMeters'] as num?)?.round(),
+      estimatedArrivalMinutes:
+          (data['estimatedArrivalMinutes'] as num?)?.round(),
+      requestedAt: requested is Timestamp ? requested.toDate() : null,
+    );
+  }
+}
+
 class TrafficService {
   TrafficService({FirebaseFirestore? firestore, FirebaseAuth? auth})
     : _firestore = firestore ?? FirebaseFirestore.instance,
@@ -103,17 +149,14 @@ class TrafficService {
   final _overpass = OverpassSignalService();
   final _signalsByDispatch = <String, List<TrafficSignal>>{};
 
-  /// The emergency escape currently holding a light green, if any. Static
-  /// because only one can be held at a time and every page (driver dashboard,
-  /// intersection search, officer page) must agree on it.
+    /// Current escape (one at a time, shared across pages).
   static final ValueNotifier<ActiveEscape?> activeEscape =
       ValueNotifier<ActiveEscape?>(null);
 
   static Timer? _escapeWatchTimer;
   static bool _releaseInFlight = false;
 
-  /// Starts watching a freshly latched escape so it releases itself as soon
-  /// as the ambulance leaves the ~1 km ring.
+  /// Watches a latched escape to auto-release outside ~1 km.
   static void _watchEscape(ActiveEscape escape) {
     activeEscape.value = escape;
     _escapeWatchTimer?.cancel();
@@ -123,8 +166,7 @@ class TrafficService {
     );
   }
 
-  /// Auto-release check: outside [IntersectionPoint.escapeRequestRadiusMeters]
-  /// the light goes straight back to its normal AUTO cycle.
+  /// Auto-release when outside escape radius.
   static Future<void> _checkEscapeRange() async {
     final escape = activeEscape.value;
     if (escape == null) {
@@ -150,14 +192,11 @@ class TrafficService {
         source: EscapeReleaseSource.autoRange,
       );
     } catch (_) {
-      // No fix this tick — try again shortly. The board's own max-hold
-      // watchdog still frees the light if the phone goes away entirely.
+      // No fix this tick — retry shortly; board watchdog frees light if phone dies.
     }
   }
 
-  /// Ends an emergency escape: sends `release` to the board (which resumes
-  /// its AUTO cycle) and closes every ACTIVE escape record so officer alert
-  /// streams clear and the audit trail records who released it.
+  /// Ends an escape: releases the board and closes ACTIVE records (audit trail).
   Future<void> releaseEscape({
     required String intersectionId,
     EscapeReleaseSource source = EscapeReleaseSource.driver,
@@ -217,11 +256,7 @@ class TrafficService {
     );
   }
 
-  /// Requests an emergency escape. The request goes straight to the traffic
-  /// light (RTDB preemption — the ambulance's approach arm goes green); no
-  /// assigned traffic officer is required. Officers assigned to the
-  /// intersection, if any, are recorded on `emergency_alerts` for their
-  /// in-app alert stream, and a Cloud Function sends them an FCM push.
+  /// Requests an escape: preempts the light green for the approach arm; notifies assigned officers via FCM.
   Future<EmergencyEscapeResult> requestEmergencyEscape({
     required String intersectionId,
     String? dispatchId,
@@ -234,9 +269,15 @@ class TrafficService {
         'Only approved ambulance drivers can request an emergency escape.',
       );
     }
-    // Escape requests are only available during an active trip. Requiring the
-    // dispatch id keeps them tied to a real ride, so the light cannot be
-    // preempted from a parked/idle ambulance.
+    // Block a second escape while one is already active on a different board.
+    final existing = activeEscape.value;
+    if (existing != null && existing.intersectionId != intersectionId) {
+      throw StateError(
+        'Release the active escape at ${existing.intersectionName} before '
+        'requesting another.',
+      );
+    }
+    // Escape only during active trip (dispatch id ties it to a real ride).
     final rideId = dispatchId?.trim() ?? '';
     if (rideId.isEmpty ||
         !await RequestService.isActiveRideForCurrentDriver(rideId)) {
@@ -276,9 +317,7 @@ class TrafficService {
         .doc(intersectionId);
     final officers = await UserService.instance.fetchOfficers();
 
-    // Re-read the intersection and recipients in the write transaction so an
-    // admin disabling an intersection is respected and repeat taps within a
-    // minute of a successful command are ignored (spam guard).
+    // Re-read in transaction: respect disabled intersections; spam-guard repeat taps.
     final plan = await _firestore
         .runTransaction<_EscapePlan>((transaction) async {
       final snapshot = await transaction.get(intersectionRef);
@@ -304,8 +343,7 @@ class TrafficService {
         );
       }
       final approachDirection = _approachDirection(intersection, position);
-      // Primary record: audit trail + dedup for the light command. No
-      // specific officer is attached — the request targets the light.
+      // Primary record: audit + dedup for the light command.
       final primaryId = 'ESC_${uid}_${intersection.id}_$rideId';
       final primaryRef = _firestore
           .collection('emergency_alerts')
@@ -316,8 +354,7 @@ class TrafficService {
           requestedAt is Timestamp &&
           DateTime.now().difference(requestedAt.toDate()) <
               const Duration(minutes: 1);
-      // A recent request whose light command went through blocks repeats.
-      // If the light did not confirm, the driver may retry immediately.
+      // Recent successful command blocks repeats; retry allowed if it failed.
       if (recent && existing?['lightCommandSent'] == true) {
         throw StateError(
           'An escape request was already sent. The light should be '
@@ -325,11 +362,10 @@ class TrafficService {
         );
       }
 
-      // Officers assigned to this intersection (if any). Optional: an empty
-      // list still allows the request because the light is targeted directly.
+      // Assigned officers (optional); empty list still allows the request.
       final recipients = <String>[];
       for (final officer in officers) {
-        if (!officer.isVerifiedOfficer || !officer.isActive) continue;
+        if (!officer.isVerifiedOfficer) continue;
         if (intersection.matchesOfficer(
           intersectionId: officer.assignedIntersectionId,
           assignedIntersection: officer.assignedIntersection,
@@ -342,13 +378,14 @@ class TrafficService {
 
       final speed = position.speed > 1 ? position.speed : 8;
       final arrivalMinutes = (distance / speed / 60).ceil();
+      final driverDisplayName =
+          profile?.name ?? profile?.fullName ?? 'Ambulance driver';
       transaction.set(primaryRef, {
         'alertId': primaryId,
         'type': 'EMERGENCY_ESCAPE',
         'source': 'DRIVER_REQUEST',
         'driverUid': uid,
-        'driverName':
-            profile?.name ?? profile?.fullName ?? 'Ambulance driver',
+        'driverName': driverDisplayName,
         'dispatchId': rideId,
         'officerId': '',
         'intersectionId': intersection.id,
@@ -370,7 +407,7 @@ class TrafficService {
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
-      // Per-officer alert docs keep the officers' in-app alert stream working.
+      // Per-officer alert docs for officers' in-app alert stream.
       for (final officerId in recipients) {
         final ref = _firestore
             .collection('emergency_alerts')
@@ -392,8 +429,7 @@ class TrafficService {
           'type': 'EMERGENCY_ESCAPE',
           'source': 'DRIVER_REQUEST',
           'driverUid': uid,
-          'driverName':
-              profile?.name ?? profile?.fullName ?? 'Ambulance driver',
+          'driverName': driverDisplayName,
           'dispatchId': rideId,
           'officerId': officerId,
           'policeUid': officerId,
@@ -422,11 +458,13 @@ class TrafficService {
         intersectionName: intersection.name,
         latitude: intersection.latitude,
         longitude: intersection.longitude,
+        driverName: driverDisplayName,
+        distanceMeters: distance,
+        estimatedArrivalMinutes: arrivalMinutes,
       );
     });
 
-    // Send the preemption command to the light. On failure the primary
-    // record keeps lightCommandSent = false, so the driver can retry at once.
+    // Send preemption; failure keeps lightCommandSent false for retry.
     final light = TrafficRtdbService(intersectionId: intersectionId);
     try {
       await light.ambulancePreempt(plan.approachDirection);
@@ -438,9 +476,7 @@ class TrafficService {
       );
     }
 
-    // The command is on its way. Watch the ambulance's position so the light
-    // releases itself the moment it leaves the ~1 km escape ring — the board
-    // has no GPS, so this is the only place the range check can happen.
+    // Watch ambulance position to auto-release outside ~1 km (board has no GPS).
     _watchEscape(
       ActiveEscape(
         intersectionId: intersectionId,
@@ -453,10 +489,7 @@ class TrafficService {
       ),
     );
 
-    // The command write gives no acknowledgement — the board may be offline
-    // or mid-cycle. Read its status to confirm the latch actually happened.
-    // The board publishes status immediately on latch; one short re-check
-    // covers the moment it was mid-transition when the command arrived.
+    // Read status to confirm latch (board gives no ack); re-check once for mid-transition.
     var state = await light.readStatus();
     if (state == null || !state.ambulanceLatched) {
       await Future<void>.delayed(const Duration(seconds: 3));
@@ -477,6 +510,21 @@ class TrafficService {
       'boardApproachLight': approachLight,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    if (plan.officersNotified > 0) {
+      unawaited(
+        _notifyEscapeViaSupabase(
+          alertId: plan.primaryId,
+          intersectionId: intersectionId,
+          intersectionName: plan.intersectionName,
+          driverName: plan.driverName,
+          approachDirection: plan.approachDirection,
+          distanceMeters: plan.distanceMeters,
+          estimatedArrivalMinutes: plan.estimatedArrivalMinutes,
+        ),
+      );
+    }
+
     return EmergencyEscapeResult(
       officersNotified: plan.officersNotified,
       approachDirection: plan.approachDirection,
@@ -505,6 +553,60 @@ class TrafficService {
           .toList(),
       'routeSignalsUpdatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  /// Active escape alerts for [uid], filtered client-side to avoid needing
+  /// composite Firestore indexes on Spark plans.
+  Stream<List<OfficerEscapeAlert>> activeAlertsForOfficer(String uid) {
+    if (uid.isEmpty) return Stream<List<OfficerEscapeAlert>>.value(const []);
+    return _firestore
+        .collection('emergency_alerts')
+        .where('officerId', isEqualTo: uid)
+        .snapshots()
+        .map((snapshot) {
+          final alerts = snapshot.docs
+              .where((doc) {
+                final data = doc.data();
+                return data['status'] == 'ACTIVE' &&
+                    data['type'] == 'EMERGENCY_ESCAPE';
+              })
+              .map(OfficerEscapeAlert.fromDoc)
+              .toList()
+            ..sort((a, b) {
+              final at = a.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              final bt = b.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              return bt.compareTo(at);
+            });
+          return alerts;
+        });
+  }
+
+  Future<void> _notifyEscapeViaSupabase({
+    required String alertId,
+    required String intersectionId,
+    required String intersectionName,
+    required String driverName,
+    required String approachDirection,
+    required double distanceMeters,
+    required int estimatedArrivalMinutes,
+  }) async {
+    if (!supabaseReady) return;
+    try {
+      await sb.functions.invoke(
+        'notify-emergency-escape',
+        body: {
+          'alertId': alertId,
+          'intersectionId': intersectionId,
+          'intersectionName': intersectionName,
+          'driverName': driverName,
+          'approachDirection': approachDirection,
+          'distanceMeters': distanceMeters.round(),
+          'estimatedArrivalMinutes': estimatedArrivalMinutes,
+        },
+      );
+    } catch (_) {
+      // Optional free-tier Supabase Edge Function: ignore if not deployed yet.
+    }
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> alertsForOfficer(String uid) =>
@@ -543,7 +645,7 @@ class TrafficService {
   ) async {
     final signals = _signalsByDispatch[dispatchId] ?? const [];
     if (signals.isEmpty || position.heading < 0) return;
-    final officers = await UserService.instance.fetchOfficers(onlyActive: true);
+    final officers = await UserService.instance.fetchOfficers();
     for (final signal in signals) {
       if (!isApproachingIntersection(
         driverLat: position.latitude,
@@ -606,14 +708,7 @@ class TrafficService {
     ),
   );
 
-  /// Bearing from the ambulance to the intersection, snapped to the nearest
-  /// approach arm — which signal the ambulance obeys when it arrives.
-  /// Same convention as the driver dashboard's auto-preemption: the arm is
-  /// where the ambulance comes FROM, i.e. opposite of bearing-to-intersection.
-  ///
-  /// When the ambulance is MOVING with a valid GPS heading, the heading is
-  /// used instead: at close range (or stationary) the bearing to the
-  /// junction is nearly meaningless and can snap to the wrong arm.
+  /// Snaps ambulance bearing to nearest approach arm (opposite of bearing-to-junction); uses GPS heading when moving.
   String _approachDirection(IntersectionPoint point, Position position) {
     const dirs = ['north', 'east', 'south', 'west'];
     double fromArmBearing;
@@ -634,8 +729,7 @@ class TrafficService {
   }
 }
 
-/// Internal plan produced by the escape-request transaction, before the
-/// RTDB light command is attempted.
+/// Plan from the escape transaction, before RTDB command.
 class _EscapePlan {
   const _EscapePlan({
     required this.primaryId,
@@ -644,6 +738,9 @@ class _EscapePlan {
     required this.intersectionName,
     required this.latitude,
     required this.longitude,
+    required this.driverName,
+    required this.distanceMeters,
+    required this.estimatedArrivalMinutes,
   });
 
   final String primaryId;
@@ -652,4 +749,7 @@ class _EscapePlan {
   final String intersectionName;
   final double latitude;
   final double longitude;
+  final String driverName;
+  final double distanceMeters;
+  final int estimatedArrivalMinutes;
 }

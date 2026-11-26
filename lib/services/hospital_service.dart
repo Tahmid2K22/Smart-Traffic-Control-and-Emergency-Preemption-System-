@@ -6,8 +6,7 @@ import 'package:geocoding/geocoding.dart';
 import '../models/models.dart';
 import '../services/user_service.dart';
 
-/// Handles hospital registration and approved-hospital queries used by the
-/// booking screen and home page.
+/// Hospital registration + approved-hospital queries.
 class HospitalService {
   HospitalService({FirebaseFirestore? firestore})
     : _providedFirestore = firestore;
@@ -62,28 +61,40 @@ class HospitalService {
       }
     } catch (_) {}
 
-    await _firestore.collection('hospitals').add({
-      'name': name.trim(),
-      'email': email.trim(),
-      'phone': phone.trim(),
-      'address': address.trim(),
-      'lat': lat,
-      'lon': lon,
-      if (lat != 0 || lon != 0) 'location': GeoPoint(lat, lon),
-      'services': <String>[],
-      'diagnoses': <String>[],
-      'beds': 0,
-      'isApproved': false,
-      'registeredBy': user.uid,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
+    try {
+      await _firestore.collection('hospitals').add({
+        'name': name.trim(),
+        'email': email.trim(),
+        'phone': phone.trim(),
+        'address': address.trim(),
+        'lat': lat,
+        'lon': lon,
+        if (lat != 0 || lon != 0) 'location': GeoPoint(lat, lon),
+        'services': <String>[],
+        'diagnoses': <String>[],
+        'beds': 0,
+        'isApproved': false,
+        'registeredBy': user.uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } on Exception {
+      // Never leave a working login with no hospital record behind.
+      try {
+        await user.delete();
+      } catch (_) {}
+      rethrow;
+    }
+
+    // createUserWithEmailAndPassword signed the app in as the new hospital.
+    // Hand the session back — the account is unusable until an admin approves.
+    await FirebaseAuth.instance.signOut();
 
     return credential;
   }
 
   // ── Queries ────────────────────────────────────────────────────────────────
 
-  /// Live stream of approved hospitals only — used by the booking screen.
+  /// Live stream of approved hospitals (booking screen).
   Stream<QuerySnapshot> approvedHospitalsStream() {
     if (Firebase.apps.isEmpty) {
       return const Stream.empty();

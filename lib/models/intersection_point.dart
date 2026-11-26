@@ -51,7 +51,7 @@ class IntersectionPoint {
   int get wayCount => directions.length;
   int get trafficLightCount => directions.length;
 
-  // Missing legacy entries are unconfigured, never fabricated live colors.
+  // Missing entries stay unconfigured; don't fabricate live colors.
   Map<String, IntersectionTrafficLight> get lights => {
     for (final direction in directions)
       direction:
@@ -73,7 +73,8 @@ class IntersectionPoint {
       latitude: latitude,
       longitude: longitude,
       plusCode: data['plusCode'] as String? ?? '',
-      isActive: data['isActive'] == true,
+      // Absent flag keeps the constructor default (enabled); only an explicit false disables.
+      isActive: data['isActive'] != false,
       trafficLights: {
         for (final direction in directions)
           if (data['trafficLights'] is Map &&

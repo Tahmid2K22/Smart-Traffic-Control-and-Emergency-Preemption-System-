@@ -8,8 +8,7 @@ import '../models/message_model.dart';
 import '../models/request_model.dart';
 import '../services/request_service.dart';
 
-/// Full-screen real-time chat between a user and their assigned driver.
-/// Works for both roles — pass [senderRole] to distinguish who is writing.
+/// Real-time chat between user and assigned driver (role via [senderRole]).
 class ChatPage extends StatefulWidget {
   const ChatPage({
     super.key,
@@ -109,7 +108,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     }
   }
 
-  // ── Quick replies ──────────────────────────────────────────────────────────
+  
 
   List<String> get _quickReplies {
     if (widget.senderRole == SenderRole.driver) {
@@ -118,7 +117,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     return ['Thank you!', 'Where are you?', 'Please hurry', 'I am at the entrance', 'OK, understood'];
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
+  
 
   @override
   Widget build(BuildContext context) {
@@ -162,7 +161,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       ),
       title: Row(
         children: [
-          // Avatar
+          
           Container(
             width: 38,
             height: 38,
@@ -327,7 +326,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         final msg = _messages[index];
         final isMe = msg.senderRole == widget.senderRole;
 
-        // Date separator logic
+        
         final showDate = index == 0 ||
             !_isSameDay(_messages[index - 1].createdAt, msg.createdAt);
 
@@ -485,7 +484,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   }
 }
 
-// ── Trip summary bar ──────────────────────────────────────────────────────────
+
 
 class _TripSummaryBar extends StatelessWidget {
   const _TripSummaryBar({required this.request});
@@ -532,7 +531,7 @@ class _TripSummaryBar extends StatelessWidget {
   }
 }
 
-// ── Message bubble ────────────────────────────────────────────────────────────
+
 
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
@@ -664,7 +663,7 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-// ── Date separator ────────────────────────────────────────────────────────────
+
 
 class _DateSeparator extends StatelessWidget {
   const _DateSeparator({required this.date});
@@ -710,7 +709,7 @@ class _DateSeparator extends StatelessWidget {
   }
 }
 
-// ── Trip detail row ───────────────────────────────────────────────────────────
+
 
 class _DetailRow extends StatelessWidget {
   const _DetailRow({required this.icon, required this.label, required this.value});

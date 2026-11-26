@@ -28,7 +28,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _imagePicker = ImagePicker();
   final _authService = AuthService();
 
-  String _role = 'patient';
+  String _role = 'user';
   DateTime? _birthDate;
   String? _selectedCity;
   String? _selectedVehicleType;
@@ -48,7 +48,7 @@ class _RegisterPageState extends State<RegisterPage> {
 
     setState(() => _isLoading = true);
     try {
-      // Verify Bangladeshi NID (name + phone + birth date) before sign up.
+      // Verify Bangladeshi NID before sign up.
       if (_birthDate == null) {
         throw StateError('Please select your date of birth.');
       }
@@ -58,12 +58,11 @@ class _RegisterPageState extends State<RegisterPage> {
       final verified = await NidService.verifyNid(
         nidNumber: _nidController.text,
         fullName: _nameController.text,
-        phoneNumber: _phoneController.text,
         dateOfBirth: _birthDate!,
       );
       if (!verified) {
         throw StateError(
-          'NID details do not match. Please check your name, phone and '
+          'NID details do not match. Please check your name and '
           'date of birth.',
         );
       }
@@ -95,7 +94,10 @@ class _RegisterPageState extends State<RegisterPage> {
     } on FirebaseAuthException catch (error) {
       _showError(error.message ?? 'Could not create your account.');
     } catch (error) {
-      _showError('Could not save your profile. Please try again.');
+      final message = error is StateError
+          ? error.message
+          : 'Could not save your profile. Please try again.';
+      _showError(message);
       debugPrint('Registration error: $error');
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -352,12 +354,19 @@ class _RegisterPageState extends State<RegisterPage> {
   Widget _buildRoleSwitcher() {
     return SegmentedButton<String>(
       segments: const [
-        ButtonSegment(value: 'patient', label: Text('Patient'), icon: Icon(Icons.person_rounded)),
+        ButtonSegment(value: 'user', label: Text('Patient'), icon: Icon(Icons.person_rounded)),
         ButtonSegment(value: 'driver', label: Text('Rider / Driver'), icon: Icon(Icons.drive_eta_rounded)),
       ],
       selected: {_role},
       onSelectionChanged: (selection) {
-        setState(() => _role = selection.first);
+        setState(() {
+          _role = selection.first;
+          _birthDate = null;
+          _selectedCity = null;
+          _selectedVehicleType = null;
+          _licenseImage = null;
+          _licenseImageError = false;
+        });
         _formKey.currentState?.reset();
       },
       style: ButtonStyle(

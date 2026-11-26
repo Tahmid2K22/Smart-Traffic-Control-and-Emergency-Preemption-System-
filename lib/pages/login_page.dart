@@ -31,7 +31,7 @@ class _LoginPageState extends State<LoginPage> {
             password: _passwordController.text.trim(),
           );
 
-      // Fetch the profile from Supabase and save a local copy for fast starts.
+      // Fetch profile from Supabase, cache locally.
       if (userCredential.user != null) {
         try {
           final profile = await UserService.instance.fetchOrMigrate(
@@ -51,7 +51,7 @@ class _LoginPageState extends State<LoginPage> {
             await prefs.setString('userPhone', profile.phone);
             await prefs.setString('userCity', profile.city ?? '');
 
-            // Keep the dispatch row in sync on every login.
+            // Sync dispatch row on login.
             await AuthService.syncDriverOnLogin(profile: profile);
           }
         } catch (e) {
@@ -59,7 +59,7 @@ class _LoginPageState extends State<LoginPage> {
         }
       }
 
-      // Reveal AuthGate's role-based destination beneath this pushed login page.
+      // Reveal AuthGate destination under this page.
       if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (mounted) {

@@ -28,7 +28,7 @@ class DrivingRoute {
 }
 
 class MapSearchService {
-  static const _userAgent = 'com.example.ambulance_app';
+  static const _userAgent = 'EAmbulanceApp/1.0 (contact@ambulance.bd)';
 
   Future<List<MapSearchSuggestion>> search(String query) async {
     final uri = Uri.https(
@@ -42,7 +42,9 @@ class MapSearchService {
         'limit': '6',
       },
     );
-    final response = await http.get(uri, headers: {'User-Agent': _userAgent});
+    final response = await http
+        .get(uri, headers: {'User-Agent': _userAgent})
+        .timeout(const Duration(seconds: 6));
     if (response.statusCode != 200) {
       throw HttpException('Nominatim returned ${response.statusCode}.');
     }
@@ -83,7 +85,9 @@ class MapSearchService {
         'geometries': 'geojson',
       },
     );
-    final response = await http.get(uri, headers: {'User-Agent': _userAgent});
+    final response = await http
+        .get(uri, headers: {'User-Agent': _userAgent})
+        .timeout(const Duration(seconds: 10));
     if (response.statusCode != 200) {
       throw HttpException('Routing service returned ${response.statusCode}.');
     }
@@ -133,11 +137,11 @@ class MapSearchService {
         destination: destination,
       );
     } on HttpException {
-      // Keep the working route estimate when Google Directions is unavailable.
+      // keep OSRM estimate if Google unavailable
     } on FormatException {
-      // Keep the working route estimate when Google returns an incomplete result.
+      // ...or returns incomplete data
     } on StateError {
-      // Keep the working route estimate when the optional Google key is unavailable.
+      // ...or key is missing
     }
 
     return DrivingRoute(
@@ -162,7 +166,9 @@ class MapSearchService {
         'key': AppConfig.googleMapsApiKey,
       },
     );
-    final response = await http.get(uri);
+    final response = await http
+        .get(uri, headers: {'User-Agent': _userAgent})
+        .timeout(const Duration(seconds: 8));
     if (response.statusCode != 200) {
       throw HttpException('Google Directions returned ${response.statusCode}.');
     }

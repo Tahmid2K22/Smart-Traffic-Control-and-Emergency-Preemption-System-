@@ -28,7 +28,6 @@ import 'constants/app_config.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load .env
   try {
     await AppConfig.load();
   } catch (_) {}
@@ -46,15 +45,13 @@ void main() async {
     final key = AppConfig.supabaseAnonKey;
     await Supabase.initialize(url: url, anonKey: key); // ignore: deprecated_member_use
   } catch (_) {
-    // No Supabase keys yet , app still runs for regular users
+    // No Supabase keys — app still runs for regular users
   }
 
   runApp(const AmbulanceApp());
 }
 
-/// If the native default app is already registered with different options
-/// (the usual reason for `[core/duplicate-app]`), the existing app is reused —
-/// Realtime Database calls pass their URL explicitly anyway.
+/// Reuse the existing app if duplicate-app fires; RTDB passes its URL explicitly.
 Future<void> _initializeFirebase() async {
   try {
     await Firebase.initializeApp(
@@ -178,9 +175,7 @@ class AuthGate extends StatelessWidget {
   }
 }
 
-/// Loads the signed-in user's profile from Supabase, then routes by role.
-/// The profile stream keeps the screen in sync when an admin changes the role
-/// or approves the account, without requiring a restart.
+/// Loads profile by role; streams updates for role/approval changes.
 class _ProfileGate extends StatefulWidget {
   const _ProfileGate({
     super.key,
@@ -253,8 +248,7 @@ class _ProfileGateState extends State<_ProfileGate> {
     }
 
     final profile = _profile;
-    // No Supabase profile (offline / not configured): keep the app usable as a
-    // regular user instead of blocking the whole session.
+    // No profile (offline/unconfigured): keep app usable as regular user.
     if (profile == null) {
       return DashboardPage(key: ValueKey('profile-${widget.uid}'));
     }
@@ -331,8 +325,7 @@ class _HospitalPendingScreen extends StatelessWidget {
   }
 }
 
-/// Loads or creates the driver's Supabase dispatch profile, checks approval,
-/// then shows [DriverDashboardPage] or a pending-approval screen.
+/// Loads/creates driver profile, checks approval, then routes.
 class _DriverGate extends StatefulWidget {
   const _DriverGate({required this.profile});
   final UserProfile profile;
@@ -354,7 +347,6 @@ class _DriverGateState extends State<_DriverGate> {
   Future<void> _loadDriver() async {
     final profile = widget.profile;
 
-    // Upsert driver profile, including the admin-set approval flag.
     await RequestService.upsertDriverProfile(
       firebaseUid: profile.uid,
       name: profile.name.isEmpty ? 'Driver' : profile.name,
@@ -383,7 +375,6 @@ class _DriverGateState extends State<_DriverGate> {
       );
     }
 
-    // Not yet approved — show a holding screen
     if (_profile == null || !_profile!.isApproved) {
       return _PendingApprovalScreen(
         driverName: widget.profile.displayName,
@@ -394,7 +385,6 @@ class _DriverGateState extends State<_DriverGate> {
   }
 }
 
-// main tab layout
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key, this.isGuest = false});
 
@@ -426,7 +416,6 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  // bottom navigation
   Widget _buildBottomNav() {
     // Guests only see Home + a Login shortcut; Activity and Account are hidden.
     final guestTabs = [
@@ -539,7 +528,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-// ── Pending approval holding screen ──────────────────────────────────────────
+
 
 class _PendingApprovalScreen extends StatelessWidget {
   const _PendingApprovalScreen({required this.driverName});
@@ -555,7 +544,7 @@ class _PendingApprovalScreen extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Icon
+              
               Container(
                 width: 110,
                 height: 110,
@@ -590,7 +579,6 @@ class _PendingApprovalScreen extends StatelessWidget {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 40),
-              // Status badge
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
@@ -624,7 +612,7 @@ class _PendingApprovalScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 40),
-              // Logout button
+              
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(

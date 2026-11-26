@@ -37,6 +37,7 @@ class _HospitalDashboardPageState extends State<HospitalDashboardPage> {
   String? _hospitalId;
   double? _latitude;
   double? _longitude;
+  String? _loadError;
   bool _loading = true;
   bool _saving = false;
 
@@ -62,6 +63,8 @@ class _HospitalDashboardPageState extends State<HospitalDashboardPage> {
         ..addAll(List<String>.from(data['diagnoses'] as List? ?? const []));
       _latitude = (data['lat'] as num?)?.toDouble();
       _longitude = (data['lon'] as num?)?.toDouble();
+    } catch (e) {
+      if (mounted) setState(() => _loadError = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -130,6 +133,39 @@ class _HospitalDashboardPageState extends State<HospitalDashboardPage> {
     if (_loading) {
       return const Scaffold(
           body: Center(child: CircularProgressIndicator(color: AppColors.primary)));
+    }
+    if (_loadError != null) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.block_rounded, size: 48, color: Colors.red),
+                const SizedBox(height: 16),
+                const Text(
+                  'Your hospital account has been revoked or could not be loaded.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _loadError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: () => FirebaseAuth.instance.signOut(),
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Sign out'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
     final name = widget.profile['name']?.toString() ?? 'Hospital';
     return Scaffold(

@@ -73,7 +73,6 @@ void main() {
         findsNothing,
       );
     }
-    // Only Home and Login buttons exist in bottom nav for guests
     expect(
       find.byWidgetPredicate(
         (widget) => widget is GButton && widget.icon == Icons.home_rounded,

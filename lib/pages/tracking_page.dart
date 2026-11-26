@@ -13,9 +13,6 @@ import '../services/map_search_service.dart';
 import 'chat_page.dart';
 import 'driver/intersection_search_page.dart';
 
-/// Shared live-tracking screen shown to both user and driver after a request
-/// is accepted. Polls the request real-time via Supabase stream and updates
-/// the driver pin on the map automatically.
 class TrackingPage extends StatefulWidget {
   const TrackingPage({
     super.key,
@@ -63,10 +60,11 @@ class _TrackingPageState extends State<TrackingPage> {
       setState(() => _request = req);
       _syncPendingTimeout(req);
       if (routeChanged) _loadRoute(req);
-      if (dispatchChanged) _watchNearbyDrivers(req);
-      _animateToRelevantPin();
+      if (dispatchChanged) {
+        _watchNearbyDrivers(req);
+        _animateToRelevantPin();
+      }
 
-      // Auto-pop when trip is done
       if (req?.status == RequestStatus.completed ||
           req?.status == RequestStatus.cancelled) {
         Future.delayed(const Duration(seconds: 2), () {
@@ -82,7 +80,8 @@ class _TrackingPageState extends State<TrackingPage> {
   }
 
   Future<void> _refreshRequest() async {
-    await RequestService.expireStalePendingRequests();
+    // The pending-request sweep runs on open and on stream events; the 3 s
+    // tick only re-reads this request (and the driver's live position).
     final request = await RequestService.getRequest(widget.requestId);
     if (!mounted || request == null) return;
     final dispatchChanged =
@@ -90,8 +89,10 @@ class _TrackingPageState extends State<TrackingPage> {
         request.driverId != _request?.driverId;
     setState(() => _request = request);
     _syncPendingTimeout(request);
-    if (dispatchChanged) _watchNearbyDrivers(request);
-    _animateToRelevantPin();
+    if (dispatchChanged) {
+      _watchNearbyDrivers(request);
+      _animateToRelevantPin();
+    }
   }
 
   void _syncPendingTimeout(AmbulanceRequest? request) {
@@ -184,10 +185,8 @@ class _TrackingPageState extends State<TrackingPage> {
     if (req == null || _mapController == null) return;
     LatLng? target;
     if (widget.isDriver) {
-      // Driver tracks the pickup point
       target = LatLng(req.pickupLat, req.pickupLng);
     } else if (req.driverLat != null && req.driverLng != null) {
-      // User tracks the driver
       target = LatLng(req.driverLat!, req.driverLng!);
     }
 
@@ -221,7 +220,6 @@ class _TrackingPageState extends State<TrackingPage> {
     if (req == null) return {};
     final markers = <Marker>{};
 
-    // Pickup marker
     markers.add(
       Marker(
         markerId: const MarkerId('pickup'),
@@ -231,7 +229,6 @@ class _TrackingPageState extends State<TrackingPage> {
       ),
     );
 
-    // Destination marker
     markers.add(
       Marker(
         markerId: const MarkerId('destination'),
@@ -241,7 +238,6 @@ class _TrackingPageState extends State<TrackingPage> {
       ),
     );
 
-    // Driver location marker (shown to user)
     if (!widget.isDriver && req.driverLat != null && req.driverLng != null) {
       markers.add(
         Marker(
@@ -321,7 +317,6 @@ class _TrackingPageState extends State<TrackingPage> {
           : null,
       body: Stack(
         children: [
-          // Map
           GoogleMap(
             initialCameraPosition: CameraPosition(
               target: req != null
@@ -339,7 +334,6 @@ class _TrackingPageState extends State<TrackingPage> {
             myLocationButtonEnabled: false,
           ),
 
-          // Bottom info sheet
           Positioned(
             left: 0,
             right: 0,
@@ -378,7 +372,6 @@ class _TrackingPageState extends State<TrackingPage> {
   }
 }
 
-// ── Status info sheet ─────────────────────────────────────────────────────────
 
 class _StatusInfo extends StatelessWidget {
   const _StatusInfo({
@@ -400,7 +393,6 @@ class _StatusInfo extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Status pill
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
           decoration: BoxDecoration(

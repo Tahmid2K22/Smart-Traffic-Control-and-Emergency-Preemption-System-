@@ -5,11 +5,8 @@ import 'request_service.dart';
 import 'supabase_service.dart';
 import 'user_service.dart';
 
-/// Handles account creation and login synchronisation.
-///
-/// Firebase Auth owns credentials/sessions. The profile itself (name, phone,
-/// role, approval flags, driver documents) is written to and read from the
-/// Supabase `users` table through [UserService].
+/// Handles account creation and login sync.
+/// Firebase Auth owns credentials/sessions; profile lives in Supabase `users` via [UserService].
 class AuthService {
   AuthService({FirebaseAuth? auth}) : _auth = auth ?? FirebaseAuth.instance;
 
@@ -103,8 +100,7 @@ class AuthService {
     return credential;
   }
 
-  /// Called on login for drivers — keeps the Supabase `drivers` row (used for
-  /// dispatch) aligned with the profile stored in Supabase `users`.
+  /// Syncs driver row on login.
   static Future<void> syncDriverOnLogin({required UserProfile profile}) async {
     if (!supabaseReady || !profile.isDriver) return;
     try {

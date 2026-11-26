@@ -4,11 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart'
 import '../models/user_profile.dart';
 import 'supabase_service.dart';
 
-/// Reads and writes user profiles in the Supabase `users` table.
-///
-/// Firebase Auth still owns authentication: it issues the uid that every row
-/// is keyed by. Everything else about a user (role, approval state, contact
-/// details, officer assignment, driver documents, FCM tokens) is stored here.
+/// Reads/writes user profiles in Supabase `users`; Firebase Auth owns identity.
 class UserService {
   UserService._();
 
@@ -27,11 +23,7 @@ class UserService {
     return row == null ? null : UserProfile.fromMap(row);
   }
 
-  /// Reads the profile and creates it when missing.
-  ///
-  /// Accounts created before the migration only exist in Firestore, so the
-  /// first read copies that legacy document into Supabase. Once every account
-  /// has signed in once this legacy fallback is never used again.
+  /// Reads the profile, migrating from Firestore once for pre-migration accounts.
   Future<UserProfile?> fetchOrMigrate(
     String firebaseUid, {
     String? fallbackName,
@@ -57,7 +49,7 @@ class UserService {
     return fetch(firebaseUid);
   }
 
-  /// Live profile stream — drives role routing and approval screens.
+  /// Live profile stream (role/approval routing).
   Stream<UserProfile?> watchProfile(String firebaseUid) {
     if (!supabaseReady || firebaseUid.isEmpty) {
       return Stream<UserProfile?>.value(null);
@@ -69,7 +61,7 @@ class UserService {
         .map((rows) => rows.isEmpty ? null : UserProfile.fromMap(rows.first));
   }
 
-  /// Live list of profiles, optionally filtered by role / approval.
+  /// Live list of profiles (optional role/approval filters).
   Stream<List<UserProfile>> watchUsers({
     List<String>? roles,
     bool? isApproved,
@@ -91,7 +83,7 @@ class UserService {
     });
   }
 
-  /// Inserts or merges rows keyed by `firebase_uid`.
+  /// Upsert by `firebase_uid`.
   Future<void> upsert(Map<String, dynamic> row) async {
     if (!supabaseReady) {
       throw StateError('Supabase is not configured. Add SUPABASE_URL and '
@@ -100,7 +92,7 @@ class UserService {
     await sb.from(_table).upsert(row, onConflict: 'firebase_uid');
   }
 
-  /// Partial update with snake_case column names.
+  /// Partial update (snake_case columns).
   Future<void> update(String firebaseUid, Map<String, dynamic> fields) async {
     if (!supabaseReady || fields.isEmpty) return;
     await sb.from(_table).update(fields).eq('firebase_uid', firebaseUid);
@@ -131,14 +123,14 @@ class UserService {
     return rows.length;
   }
 
-  /// Traffic police profiles, optionally only verified+active officers.
-  Future<List<UserProfile>> fetchOfficers({bool onlyActive = false}) async {
+  /// Verified traffic police profiles.
+  Future<List<UserProfile>> fetchOfficers() async {
     if (!supabaseReady) return const [];
-    var query = sb.from(_table).select().eq('role', 'traffic_police');
-    if (onlyActive) {
-      query = query.eq('is_verified', true).eq('is_active', true);
-    }
-    final rows = await query;
+    final rows = await sb
+        .from(_table)
+        .select()
+        .eq('role', 'traffic_police')
+        .eq('is_verified', true);
     return rows.map(UserProfile.fromMap).toList();
   }
 
@@ -147,7 +139,7 @@ class UserService {
     return profile?.isAdmin ?? false;
   }
 
-  /// Stores an FCM token so Cloud Functions can push to this device.
+  /// Stores an FCM token for push delivery.
   Future<void> addFcmToken(
     String firebaseUid,
     String token, {

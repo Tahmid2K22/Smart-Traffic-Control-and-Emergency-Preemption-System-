@@ -96,7 +96,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // top header with gradient + logout button
   Widget _buildHeader() {
     return Container(
       width: double.infinity,
@@ -113,7 +112,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
         children: [
           Row(
             children: [
-              // icon
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
@@ -149,7 +147,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   ],
                 ),
               ),
-              // logout
               GestureDetector(
                 onTap: _showLogoutDialog,
                 child: Container(
@@ -172,7 +169,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // bottom nav bar â€” 5 tabs
   Widget _buildBottomNav() {
     return Container(
       decoration: BoxDecoration(
@@ -251,7 +247,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // overview/home tab
   Widget _buildOverviewTab() {
     return SingleChildScrollView(
       physics: const BouncingScrollPhysics(),
@@ -259,7 +254,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // title + refresh button
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -292,7 +286,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
             ],
           ),
           20.heightBox,
-          // stat cards
           if (_statsLoading)
             const Center(child: CircularProgressIndicator())
           else
@@ -316,7 +309,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
             ),
           ),
           const SizedBox(height: 20),
-          // pending drivers preview
           StreamBuilder<List<UserProfile>>(
             stream: _adminService.pendingDriversStream(),
             builder: (context, snapshot) {
@@ -351,7 +343,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
             },
           ),
           24.heightBox,
-          // pending hospitals preview
           _buildPendingSection(
             title: 'Pending Hospital Approvals',
             stream: _adminService.pendingHospitalsStream(),
@@ -480,7 +471,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // Generic pending section builder
   Widget _buildPendingSection({
     required String title,
     required Stream<QuerySnapshot> stream,
@@ -581,7 +571,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
     );
   }
 
-  // logout confirmation
   void _showLogoutDialog() {
     showDialog(
       context: context,
@@ -622,7 +611,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
   }
 }
 
-// â”€â”€ Pending Driver Tile (overview) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class _PendingDriverTile extends StatefulWidget {
   final String uid;
@@ -764,7 +752,6 @@ class _PendingDriverTileState extends State<_PendingDriverTile> {
   }
 }
 
-// â”€â”€ Pending Hospital Tile (overview) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class _PendingHospitalTile extends StatefulWidget {
   final String id;
@@ -878,7 +865,7 @@ class _PendingHospitalTileState extends State<_PendingHospitalTile> {
                   icon: Icons.cancel_rounded,
                   color: Colors.red,
                   onTap: () => _doAction(
-                    () => widget.adminService.rejectHospital(
+                    () => widget.adminService.deleteHospital(
                       widget.id,
                       name: name,
                     ),
@@ -908,7 +895,6 @@ class _PendingHospitalTileState extends State<_PendingHospitalTile> {
   }
 }
 
-// simple data holder for each stat card
 class _StatCardData {
   final String title;
   final int value;

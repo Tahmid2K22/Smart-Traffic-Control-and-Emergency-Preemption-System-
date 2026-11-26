@@ -21,8 +21,6 @@ import '../chat_page.dart';
 import '../tracking_page.dart';
 import 'intersection_search_page.dart';
 
-/// Uber-like dashboard for approved drivers.
-/// Shows an online/offline toggle and a real-time incoming-request card.
 class DriverDashboardPage extends StatefulWidget {
   const DriverDashboardPage({super.key, required this.driver});
 
@@ -39,25 +37,16 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   Position? _latestPosition;
   AmbulanceRequest? _activeRequest;
 
-  // streams
   StreamSubscription<List<AmbulanceRequest>>? _pendingSub;
   StreamSubscription<AmbulanceRequest?>? _activeSub;
 
-  // location
   StreamSubscription<Position>? _locationSub;
   final _trafficService = TrafficService();
   final _mapSearchService = MapSearchService();
 
-  // countdown for auto-reject
   Timer? _countdownTimer;
   int _countdown = 30;
 
-  // Emergency signal priority: armed by the driver during an active trip.
-  // The trigger is ROUTE-AWARE: the junction must lie on the planned trip
-  // path (Google Directions geometry) less than 1 km of DRIVING ahead —
-  // a plain 1 km radius is only the fallback when no route is available.
-  // Entering that window requests preemption; passing the junction (or
-  // disarming / trip end) releases the light back to its AUTO cycle.
   static const _preemptAheadMeters = 1000.0;
   static const _preemptOnRouteMeters = 80.0;
   static const _preemptRadiusFallbackMeters = 1000.0;
@@ -72,16 +61,15 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   List<LatLng>? _routePoints;
   String? _routeRequestId;
 
-  // unread chat badge
   int _unreadCount = 0;
   StreamSubscription<List<ChatMessage>>? _chatSub;
   int _lastSeenMessageCount = 0;
+  bool _chatOpen = false;
 
   @override
   void initState() {
     super.initState();
     _driver = widget.driver;
-    // Load intersections from the server (no hardcoded fallback).
     _intersectionService.watchIntersections().first.then((list) {
       if (mounted) setState(() => _intersections = list);
     });
@@ -101,7 +89,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     super.dispose();
   }
 
-  // ── Online toggle ──────────────────────────────────────────────────────────
 
   Future<void> _toggleOnline(bool value) async {
     await RequestService.setOnlineStatus(driverId: _driver.id, isOnline: value);
@@ -127,7 +114,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       _pendingSub?.cancel();
       _activeSub?.cancel();
       _locationSub?.cancel();
-      // Offline: nothing may keep holding a light green.
       TrafficService.releaseActiveEscape(EscapeReleaseSource.driver);
       setState(() {
         _allPendingRequests = [];
@@ -137,30 +123,24 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     }
   }
 
-  // ── Streams ────────────────────────────────────────────────────────────────
 
   void _startListening() {
-    // Pending requests feed
     _pendingSub = RequestService.streamPendingRequests().listen((list) {
       if (!mounted) return;
       setState(() {
         _allPendingRequests = list;
         _pendingRequests = _nearbyRequests(list);
       });
-      // Start countdown for the first new request
       if (list.isNotEmpty && _countdownTimer == null) _startCountdown();
     });
 
-    // Active request (accepted)
     _activeSub = RequestService.streamDriverActiveRequest(_driver.id)
         .listen((req) {
           if (!mounted) return;
           final prevReq = _activeRequest;
           setState(() => _activeRequest = req);
-          // Start or stop chat unread listener when active request changes
           if (req?.id != prevReq?.id) {
             if (req == null && prevReq != null) {
-              // Trip over: drop any emergency escape still holding a green.
               TrafficService.releaseActiveEscape(EscapeReleaseSource.driver);
             }
             _chatSub?.cancel();
@@ -169,7 +149,9 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
             if (req != null) {
               _prepareTrafficSignals(req);
               _chatSub = RequestService.streamMessages(req.id).listen((msgs) {
-                if (!mounted) return;
+                // While ChatPage is open the messages count as seen; only
+                // count unread when the dashboard itself is visible.
+                if (!mounted || _chatOpen) return;
                 setState(
                   () => _unreadCount = msgs.length - _lastSeenMessageCount < 0
                       ? 0
@@ -199,7 +181,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   }
 
   Future<void> _prepareTrafficSignals(AmbulanceRequest request) async {
-    // Route for the along-path preemption trigger (same geometry each trip).
     if (_routeRequestId != request.id) {
       _routeRequestId = request.id;
       _routePoints = null;
@@ -210,7 +191,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
           destination: LatLng(request.destinationLat, request.destinationLng),
         );
       } catch (_) {
-        // Route unavailable: the radius fallback stays in charge.
       }
     }
     try {
@@ -239,7 +219,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       if (_countdown <= 0) {
         t.cancel();
         _countdownTimer = null;
-        // Auto-reject: just pop the first pending entry locally (no DB change)
         if (_pendingRequests.isNotEmpty) {
           setState(() => _pendingRequests = _pendingRequests.sublist(1));
           if (_pendingRequests.isNotEmpty) _startCountdown();
@@ -248,7 +227,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     });
   }
 
-  // ── Location ───────────────────────────────────────────────────────────────
 
   Future<void> _startLocationUpdates() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -293,16 +271,8 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
         });
   }
 
-  // ── Emergency signal priority ──────────────────────────────────────────────
 
-  /// Geofence check on every GPS fix. One RTDB write per boundary crossing.
-  /// Primary trigger: the junction lies ON the trip route and is less than
-  /// 1 km of driving ahead. Fallback (no route available): the plain 1 km
-  /// radius. Release when the junction is passed along the route, the
-  /// ambulance leaves the 1.2 km radius, or the trip/arming ends.
   Future<void> _checkEmergencyPreempt(Position pos) async {
-    // A manually requested escape owns the light right now — don't send our
-    // own preemption or release commands until it is over.
     if (TrafficService.activeEscape.value != null) return;
     if (!_emergencyArmed || _activeRequest == null) {
       if (_preemptSent) await _releasePreempt();
@@ -325,7 +295,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       position: LatLng(pos.latitude, pos.longitude),
     );
 
-    // Nearest junction that is on the route and ahead of us.
     IntersectionPoint? target;
     var bestRemaining = double.infinity;
     var bestAlong = 0.0;
@@ -356,7 +325,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
         if (mounted) setState(() => _preemptSent = true);
         if (mounted) _showSnack('🚑 Preemption requested at ${target.name}');
       } catch (_) {
-        // Network hiccup: the next GPS fix retries.
       }
       return;
     }
@@ -369,7 +337,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     }
   }
 
-  /// Plain-radius fallback when the trip route is unavailable.
   Future<void> _checkPreemptByRadius(Position pos) async {
     IntersectionPoint? nearest;
     var best = double.infinity;
@@ -391,15 +358,12 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
         if (mounted) setState(() => _preemptSent = true);
         if (mounted) _showSnack('🚑 Preemption requested at ${nearest.name}');
       } catch (_) {
-        // Network hiccup: the next GPS fix retries.
       }
     } else if (best > _releaseRadiusMeters && _preemptSent) {
       await _releasePreempt();
     }
   }
 
-  /// Bearing from the ambulance to the intersection, snapped to the nearest
-  /// approach arm (which signal the ambulance obeys when it arrives).
   String? _approachDirection(IntersectionPoint point, double lat, double lng) {
     final dLng = (point.longitude - lng) * math.pi / 180;
     final lat1 = lat * math.pi / 180;
@@ -408,8 +372,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     final x = math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(dLng);
     final bearing = (math.atan2(y, x) * 180 / math.pi + 360) % 360;
-    // 0/90/180/270 = N/E/S/W arms; +180 because the arm is where the
-    // ambulance comes FROM, i.e. opposite of the bearing-to-intersection.
     const dirs = ['north', 'east', 'south', 'west'];
     return dirs[(((bearing + 180 + 45) ~/ 90)) % 4];
   }
@@ -418,8 +380,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     final service = _preemptService;
     _preemptService = null;
     if (mounted) setState(() => _preemptSent = false);
-    // Never release a light that a manually requested escape is holding —
-    // the escape's own watcher releases it (range exit, driver or officer).
     final escape = TrafficService.activeEscape.value;
     if (escape != null && escape.intersectionId == service?.intersectionId) {
       return;
@@ -427,7 +387,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     try {
       await service?.releaseAmbulance();
     } catch (_) {
-      // Best-effort: the firmware's max-hold watchdog recovers anyway.
     }
   }
 
@@ -437,12 +396,10 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
       await _releasePreempt();
       return;
     }
-    // Already inside the zone? Fire immediately (GPS may be stationary).
     final pos = _latestPosition;
     if (pos != null) await _checkEmergencyPreempt(pos);
   }
 
-  // ── Accept / Reject ────────────────────────────────────────────────────────
 
   Future<void> _acceptRequest(AmbulanceRequest request) async {
     _countdownTimer?.cancel();
@@ -513,7 +470,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
     SnackBar(content: Text(msg), behavior: SnackBarBehavior.floating),
   );
 
-  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -612,7 +568,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
               ],
             ),
           ),
-          // Online toggle
           Column(
             children: [
               Switch(
@@ -718,7 +673,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                 child: ElevatedButton(
                   onPressed: () {
                     Navigator.pop(ctx);
-                    // Go offline first so we don't leave ghost-online state
                     RequestService.setOnlineStatus(
                       driverId: _driver.id,
                       isOnline: false,
@@ -897,8 +851,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                   value: '৳${req.estimatedFare}',
                 ),
                 const SizedBox(height: 12),
-                // Emergency signal priority: greens the light for the
-                // ambulance's approach when it comes within 1 km.
                 Container(
                   decoration: BoxDecoration(
                     color: _emergencyArmed
@@ -1054,6 +1006,7 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                                 _lastSeenMessageCount + _unreadCount,
                           );
                           setState(() => _unreadCount = 0);
+                          setState(() => _chatOpen = true);
                           Navigator.of(context)
                               .push(
                                 MaterialPageRoute<void>(
@@ -1066,9 +1019,9 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
                                 ),
                               )
                               .then((_) {
-                                // Reset unread after returning
                                 if (mounted) {
                                   setState(() {
+                                    _chatOpen = false;
                                     _unreadCount = 0;
                                   });
                                 }
@@ -1124,7 +1077,6 @@ class _DriverDashboardPageState extends State<DriverDashboardPage> {
   }
 }
 
-// ── Incoming request card ─────────────────────────────────────────────────────
 
 class _IncomingRequestCard extends StatelessWidget {
   const _IncomingRequestCard({
@@ -1157,7 +1109,6 @@ class _IncomingRequestCard extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Countdown bar
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             child: LinearProgressIndicator(
@@ -1210,7 +1161,6 @@ class _IncomingRequestCard extends StatelessWidget {
                         ],
                       ),
                     ),
-                    // Countdown circle
                     Container(
                       width: 52,
                       height: 52,

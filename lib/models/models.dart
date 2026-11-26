@@ -1,5 +1,3 @@
-// shared models
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -17,7 +15,7 @@ class ServiceItem {
   });
 }
 
-// ── Hospital model ────────────────────────────────────────────────────────────
+// Hospital model
 
 class HospitalModel {
   final String id;
@@ -89,7 +87,7 @@ class HospitalModel {
   };
 }
 
-// ── Admin activity log ────────────────────────────────────────────────────────
+// Admin activity log
 
 class AdminLog {
   final String id;

@@ -328,7 +328,7 @@ class _ActivityPageState extends State<ActivityPage>
       ),
       child: Column(
         children: [
-          // Status bar
+          
           Container(
             height: 4,
             decoration: BoxDecoration(
@@ -343,7 +343,7 @@ class _ActivityPageState extends State<ActivityPage>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header row
+                
                 Row(
                   children: [
                     Container(
@@ -405,7 +405,7 @@ class _ActivityPageState extends State<ActivityPage>
                   child: Divider(height: 1, color: Color(0xFFEFEFEF)),
                 ),
 
-                // Route info
+                
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -472,7 +472,7 @@ class _ActivityPageState extends State<ActivityPage>
 
                 14.heightBox,
 
-                // Details strip
+                
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
@@ -521,7 +521,7 @@ class _ActivityPageState extends State<ActivityPage>
                   ),
                 ],
 
-                // Active trip — Track button
+                
                 if (isActive) ...[
                   12.heightBox,
                   Row(
@@ -591,7 +591,7 @@ class _ActivityPageState extends State<ActivityPage>
                   ),
                 ],
 
-                // Cancelled — cancel info
+                
                 if (isCancelled) ...[
                   12.heightBox,
                   Row(
@@ -613,7 +613,7 @@ class _ActivityPageState extends State<ActivityPage>
                   ),
                 ],
 
-                // Completed with driver — View Chat history
+                
                 if (isCompleted && req.driverId != null) ...[
                   12.heightBox,
                   SizedBox(

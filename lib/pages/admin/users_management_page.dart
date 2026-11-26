@@ -17,6 +17,10 @@ class _UsersManagementPageState extends State<UsersManagementPage>
     with SingleTickerProviderStateMixin {
   final _adminService = AdminService();
   late final TabController _tabs;
+  // One stream for the page's lifetime; re-creating it on every build
+  // resubscribes and flashes the spinner on every tab switch.
+  late final Stream<List<UserProfile>> _usersStream =
+      _adminService.allUsersStream();
 
   @override
   void initState() {
@@ -39,7 +43,6 @@ class _UsersManagementPageState extends State<UsersManagementPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Top navbar — same design as the Hospitals panel.
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
           child: Container(
@@ -67,7 +70,7 @@ class _UsersManagementPageState extends State<UsersManagementPage>
         ),
         Expanded(
           child: StreamBuilder<List<UserProfile>>(
-            stream: _adminService.allUsersStream(),
+            stream: _usersStream,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
@@ -129,7 +132,6 @@ class _UsersManagementPageState extends State<UsersManagementPage>
   }
 }
 
-// User card widget
 class _UserCard extends StatefulWidget {
   final String uid;
   final Map<String, dynamic> data;
@@ -332,7 +334,6 @@ class _UserCardState extends State<_UserCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 Container(
@@ -382,14 +383,12 @@ class _UserCardState extends State<_UserCard> {
                     ],
                   ),
                 ),
-                // Role badge
                 _RoleBadge(role: role),
               ],
             ),
             12.heightBox,
             const Divider(height: 1, color: Color(0xFFF0F0F0)),
             12.heightBox,
-            // Info Rows
             _infoRow(Icons.phone_outlined, 'Phone', phone),
             6.heightBox,
             _infoRow(Icons.location_city_rounded, 'City', city),
@@ -404,7 +403,6 @@ class _UserCardState extends State<_UserCard> {
             ],
 
             14.heightBox,
-            // Actions
             if (_loading)
               const Center(
                 child: SizedBox(
@@ -416,7 +414,6 @@ class _UserCardState extends State<_UserCard> {
             else
               Row(
                 children: [
-                  // Role Toggle Button
                   if (isTrafficPolice) ...[
                     Expanded(
                       child: _ActionButton(
@@ -440,7 +437,6 @@ class _UserCardState extends State<_UserCard> {
                       ),
                     ),
                   ] else ...[
-                    // User or Patient -> Provide "Make Traffic Police" + "Make Admin"
                     Expanded(
                       child: _ActionButton(
                         icon: Icons.local_police_rounded,
@@ -463,7 +459,6 @@ class _UserCardState extends State<_UserCard> {
                   ],
 
                   8.widthBox,
-                  // Delete button
                   SizedBox(
                     width: 44,
                     height: 40,
@@ -523,7 +518,6 @@ class _UserCardState extends State<_UserCard> {
   }
 }
 
-// Role badge with dynamic colors & icons
 class _RoleBadge extends StatelessWidget {
   final String role;
   const _RoleBadge({required this.role});

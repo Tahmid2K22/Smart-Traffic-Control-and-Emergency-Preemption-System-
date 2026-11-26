@@ -35,7 +35,6 @@ class _HospitalsManagementPageState extends State<HospitalsManagementPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Tab bar
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
           child: Row(
@@ -69,19 +68,16 @@ class _HospitalsManagementPageState extends State<HospitalsManagementPage>
         ),
         const SizedBox(height: 12),
 
-        // Tab views
         Expanded(
           child: TabBarView(
             controller: _tabs,
             children: [
-              // Pending
               _HospitalList(
                 stream: _adminService.pendingHospitalsStream(),
                 emptyMessage: 'No pending hospitals',
                 emptyIcon: Icons.check_circle_outline_rounded,
                 adminService: _adminService,
               ),
-              // All
               _HospitalList(
                 stream: _adminService.allHospitalsStream(),
                 emptyMessage: 'No hospitals registered yet',
@@ -96,7 +92,6 @@ class _HospitalsManagementPageState extends State<HospitalsManagementPage>
   }
 }
 
-// ── Hospital list ─────────────────────────────────────────────────────────────
 
 class _HospitalList extends StatelessWidget {
   const _HospitalList({
@@ -161,7 +156,6 @@ class _HospitalList extends StatelessWidget {
   }
 }
 
-// ── Hospital card ─────────────────────────────────────────────────────────────
 
 class _HospitalCard extends StatefulWidget {
   const _HospitalCard({
@@ -228,7 +222,6 @@ class _HospitalCardState extends State<_HospitalCard> {
       ),
       child: Column(
         children: [
-          // status top bar
           Container(
             height: 3,
             decoration: BoxDecoration(
@@ -242,7 +235,6 @@ class _HospitalCardState extends State<_HospitalCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header row
                 Row(
                   children: [
                     Container(
@@ -302,7 +294,6 @@ class _HospitalCardState extends State<_HospitalCard> {
                   child: Divider(height: 1, color: Color(0xFFEFEFEF)),
                 ),
 
-                // Coordinates
                 Row(
                   children: [
                     const Icon(Icons.pin_drop_rounded,
@@ -317,7 +308,6 @@ class _HospitalCardState extends State<_HospitalCard> {
                 ),
                 10.heightBox,
 
-                // Services chips
                 if (services.isNotEmpty) ...[
                   Text('Services',
                       style: GoogleFonts.poppins(
@@ -335,7 +325,6 @@ class _HospitalCardState extends State<_HospitalCard> {
                   10.heightBox,
                 ],
 
-                // Diagnoses chips
                 if (diagnoses.isNotEmpty) ...[
                   Text('Specialties',
                       style: GoogleFonts.poppins(
@@ -353,7 +342,6 @@ class _HospitalCardState extends State<_HospitalCard> {
                   12.heightBox,
                 ],
 
-                // Action buttons
                 if (_loading)
                   const Center(
                     child: SizedBox(
@@ -377,7 +365,7 @@ class _HospitalCardState extends State<_HospitalCard> {
                           onTap: () => _doAction(
                             () => isApproved
                                 ? widget.adminService
-                                    .rejectHospital(widget.id, name: name)
+                                    .revokeHospital(widget.id, name: name)
                                 : widget.adminService
                                     .approveHospital(widget.id, name: name),
                           ),
@@ -423,7 +411,7 @@ class _HospitalCardState extends State<_HospitalCard> {
               Navigator.pop(ctx);
               _doAction(
                 () => widget.adminService
-                    .rejectHospital(widget.id, name: name),
+                    .deleteHospital(widget.id, name: name),
               );
             },
             style: ElevatedButton.styleFrom(

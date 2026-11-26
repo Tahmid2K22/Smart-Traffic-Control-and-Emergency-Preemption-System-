@@ -19,7 +19,7 @@ void main() {
     });
     addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
 
-    // No Firebase initialization: browsing must not seed or query sample data.
+    // No Firebase init, so browsing must not seed or query sample data.
     await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: HomePage(isGuest: true))),
     );
