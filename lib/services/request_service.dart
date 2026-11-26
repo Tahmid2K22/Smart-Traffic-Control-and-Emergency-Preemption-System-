@@ -170,7 +170,7 @@ class RequestService {
             'driver_id': null,
             'accepted_at': null,
             'completed_at': null,
-            'created_at': DateTime.now().toIso8601String(),
+            'created_at': DateTime.now().toUtc().toIso8601String(),
           })
           .eq('id', requestId)
           .eq('driver_id', driverId)
@@ -238,11 +238,16 @@ class RequestService {
     if (!supabaseReady) {
       throw StateError('Supabase is not initialised.');
     }
+    final cutoff = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(minutes: 10))
+        .toIso8601String();
     final expired = await sb
         .from(SupabaseTables.requests)
         .update({'status': RequestStatus.cancelled.toDbString()})
         .eq('id', requestId)
         .eq('status', RequestStatus.pending.toDbString())
+        .lt('created_at', cutoff)
         .select('id');
     return expired.isNotEmpty;
   }
@@ -252,6 +257,7 @@ class RequestService {
   static Future<int> expireStalePendingRequests() async {
     if (!supabaseReady) return 0;
     final cutoff = DateTime.now()
+        .toUtc()
         .subtract(const Duration(minutes: 10))
         .toIso8601String();
     final expired = await sb

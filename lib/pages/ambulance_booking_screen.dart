@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,8 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/colors.dart';
+import '../models/models.dart';
+import '../services/hospital_service.dart';
 import '../services/map_search_service.dart';
 import '../services/places_api_service.dart';
 import '../services/request_service.dart';
@@ -34,6 +37,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   final _destinationController = TextEditingController();
   final _destinationFocus = FocusNode();
   Geocoding? _geocoder;
+  final _hospitalService = HospitalService();
   final _mapSearchService = MapSearchService();
   final _placesApi = PlacesApiService();
   Timer? _autocompleteTimer;
@@ -41,6 +45,8 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
   List<PlaceSuggestion> _destinationSuggestions = const [];
   List<String> _recentSearches = const [];
   GoogleMapController? _mapController;
+  StreamSubscription<QuerySnapshot>? _hospitalSubscription;
+  List<HospitalModel> _approvedHospitals = const [];
   Set<Polyline> _routePolylines = const {};
   LatLng? _pickup;
   LatLng? _destination;
@@ -89,6 +95,29 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     super.initState();
     _loadRecentSearches();
     _loadCurrentLocation();
+    _hospitalSubscription = _hospitalService.approvedHospitalsStream().listen(
+      (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _approvedHospitals = snapshot.docs
+              .map(HospitalModel.fromDoc)
+              .where(
+                (hospital) =>
+                    hospital.lat.isFinite &&
+                    hospital.lon.isFinite &&
+                    hospital.lat >= -90 &&
+                    hospital.lat <= 90 &&
+                    hospital.lon >= -180 &&
+                    hospital.lon <= 180 &&
+                    (hospital.lat != 0 || hospital.lon != 0),
+              )
+              .toList();
+        });
+      },
+      onError: (Object error) {
+        debugPrint('Approved hospital locations failed to load: $error');
+      },
+    );
   }
 
   Future<void> _loadRecentSearches() async {
@@ -120,6 +149,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     _destinationController.dispose();
     _destinationFocus.dispose();
     _autocompleteTimer?.cancel();
+    _hospitalSubscription?.cancel();
     _placesApi.dispose();
     _mapSearchService.dispose();
     super.dispose();
@@ -407,8 +437,7 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
     try {
       // Fetch user profile for name and phone
       final profile = await UserService.instance.fetch(user.uid);
-      final userName =
-          profile?.displayName ?? user.displayName ?? 'User';
+      final userName = profile?.displayName ?? user.displayName ?? 'User';
       final userPhone = profile?.phone ?? '';
 
       // Create request in Supabase
@@ -468,6 +497,19 @@ class _AmbulanceBookingScreenState extends State<AmbulanceBookingScreen> {
 
   Set<Marker> _markers() {
     final markers = <Marker>{};
+    for (final hospital in _approvedHospitals) {
+      markers.add(
+        Marker(
+          markerId: MarkerId('hospital-${hospital.id}'),
+          position: LatLng(hospital.lat, hospital.lon),
+          infoWindow: InfoWindow(
+            title: hospital.name,
+            snippet: hospital.address,
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRose),
+        ),
+      );
+    }
     if (_pickup != null) {
       markers.add(
         Marker(
@@ -640,6 +682,50 @@ class _TripPlanningSheet extends StatelessWidget {
   final ValueChanged<int> onSelected;
   final VoidCallback onRequest;
 
+  void _showFareBreakdown(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('How ambulance fares are calculated'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Estimated fare = base fare + (route distance × per-kilometer rate). '
+                'The total is rounded to the nearest taka.',
+              ),
+              const SizedBox(height: 16),
+              for (final tier in tiers) ...[
+                Text(
+                  tier.name,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  distanceKm > 0
+                      ? '৳${tier.baseFare} base + ৳${tier.perKm}/km × '
+                            '${distanceKm.toStringAsFixed(1)} km = '
+                            '৳${(tier.baseFare + distanceKm * tier.perKm).round()}'
+                      : '৳${tier.baseFare} base + ৳${tier.perKm}/km. '
+                            'Set a route to calculate the distance fare.',
+                ),
+                const SizedBox(height: 12),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Material(
@@ -768,13 +854,31 @@ class _TripPlanningSheet extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 16),
-          const Text(
-            'Choose ambulance type',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textDark,
-            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Choose ambulance type',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Explain fare calculation',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                onPressed: () => _showFareBreakdown(context),
+                icon: const Icon(
+                  Icons.info_outline_rounded,
+                  size: 19,
+                  color: AppColors.primary,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           ...List.generate(
