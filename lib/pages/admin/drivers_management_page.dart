@@ -5,6 +5,7 @@ import '../../constants/colors.dart';
 import '../../models/user_profile.dart';
 import '../../services/admin_service.dart';
 import '../../services/user_service.dart';
+import '../../widgets/admin_record_details.dart';
 
 class DriversManagementPage extends StatefulWidget {
   const DriversManagementPage({super.key});
@@ -405,6 +406,11 @@ class _DriverCardState extends State<_DriverCard> {
                       ),
                     ],
                   ),
+                ),
+
+                AdminRecordDetails(
+                  title: 'View all driver information',
+                  data: data,
                 ),
 
                 14.heightBox,

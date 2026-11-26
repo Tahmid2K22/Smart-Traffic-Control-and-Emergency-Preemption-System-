@@ -86,6 +86,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   const DriversManagementPage(),
                   const UsersManagementPage(),
                   const HospitalsManagementPage(),
+                  const EmergencyServicesManagementPage(),
                   const AdminActivityLogPage(),
                 ],
               ),
@@ -231,6 +232,15 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                 ),
               ),
               GButton(
+                icon: Icons.emergency_rounded,
+                text: '999',
+                textStyle: GoogleFonts.poppins(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+              GButton(
                 icon: Icons.history_rounded,
                 text: 'Logs',
                 textStyle: GoogleFonts.poppins(
@@ -305,26 +315,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => const IntersectionsManagementPage(),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            margin: EdgeInsets.zero,
-            child: ListTile(
-              leading: const Icon(
-                Icons.emergency_rounded,
-                color: AppColors.primary,
-              ),
-              title: const Text('Manage 999 services'),
-              subtitle: const Text(
-                'Add and update police stations, fire services and more',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const EmergencyServicesManagementPage(),
                 ),
               ),
             ),

@@ -5,6 +5,7 @@ import 'package:velocity_x/velocity_x.dart';
 import '../../constants/colors.dart';
 import '../../models/user_profile.dart';
 import '../../services/admin_service.dart';
+import '../../widgets/admin_record_details.dart';
 
 class UsersManagementPage extends StatefulWidget {
   const UsersManagementPage({super.key});
@@ -401,6 +402,11 @@ class _UserCardState extends State<_UserCard> {
               6.heightBox,
               _infoRow(Icons.traffic_outlined, 'Intersection', intersection),
             ],
+
+            AdminRecordDetails(
+              title: 'View all account information',
+              data: data,
+            ),
 
             14.heightBox,
             if (_loading)

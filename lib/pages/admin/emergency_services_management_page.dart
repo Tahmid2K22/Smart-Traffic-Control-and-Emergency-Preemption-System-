@@ -4,6 +4,7 @@ import 'package:geocoding/geocoding.dart';
 import '../../constants/colors.dart';
 import '../../models/emergency_service_location.dart';
 import '../../services/emergency_service_directory_service.dart';
+import 'emergency_service_location_picker_page.dart';
 
 class EmergencyServicesManagementPage extends StatefulWidget {
   const EmergencyServicesManagementPage({super.key});
@@ -368,6 +369,30 @@ class _EmergencyServiceFormDialogState
     return (locations.first.latitude, locations.first.longitude);
   }
 
+  Future<void> _pickLocationOnMap() async {
+    final latitude = double.tryParse(_latitudeController.text.trim());
+    final longitude = double.tryParse(_longitudeController.text.trim());
+    final selection = await Navigator.of(context)
+        .push<EmergencyServiceMapSelection>(
+          MaterialPageRoute<EmergencyServiceMapSelection>(
+            builder: (_) => EmergencyServiceLocationPickerPage(
+              initialLatitude: latitude,
+              initialLongitude: longitude,
+              initialAddress: _addressController.text.trim(),
+            ),
+          ),
+        );
+    if (!mounted || selection == null) return;
+    setState(() {
+      _latitudeController.text = selection.location.latitude.toString();
+      _longitudeController.text = selection.location.longitude.toString();
+      final address = selection.address?.trim();
+      if (address != null && address.isNotEmpty) {
+        _addressController.text = address;
+      }
+    });
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() {
@@ -481,6 +506,14 @@ class _EmergencyServiceFormDialogState
                     ),
                   ),
                 ],
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _saving ? null : _pickLocationOnMap,
+                  icon: const Icon(Icons.map_outlined),
+                  label: const Text('Search and add from map'),
+                ),
               ),
               const Align(
                 alignment: Alignment.centerLeft,
