@@ -44,6 +44,9 @@ class _EmergencyServiceLocationPickerPageState
   String? _selectedAddress;
   List<MapSearchSuggestion> _suggestions = const [];
   int _searchRequest = 0;
+  bool _cameraMoveStarted = false;
+  LatLng? _cameraStartCenter;
+  MapType _mapType = MapType.normal;
   bool _searching = false;
   bool _resolvingAddress = false;
   String? _error;
@@ -119,9 +122,33 @@ class _EmergencyServiceLocationPickerPageState
       _error = null;
     });
     await _mapController?.animateCamera(
-      CameraUpdate.newLatLngZoom(location, 15),
+      CameraUpdate.newLatLngZoom(location, 18),
     );
   }
+
+  void _onCameraMoveStarted() {
+    _cameraMoveStarted = true;
+    _cameraStartCenter = _center;
+  }
+
+  void _onCameraMove(CameraPosition position) {
+    _center = position.target;
+  }
+
+  void _onCameraIdle() {
+    if (!_cameraMoveStarted) return;
+    _cameraMoveStarted = false;
+    final start = _cameraStartCenter;
+    _cameraStartCenter = null;
+    if (start == null || _sameLocation(start, _center)) return;
+    final selected = _selectedLocation;
+    if (selected != null && _sameLocation(selected, _center)) return;
+    _selectMapPoint(_center);
+  }
+
+  bool _sameLocation(LatLng first, LatLng second) =>
+      (first.latitude - second.latitude).abs() < 0.000001 &&
+      (first.longitude - second.longitude).abs() < 0.000001;
 
   void _selectMapPoint(LatLng location) {
     setState(() {
@@ -178,9 +205,15 @@ class _EmergencyServiceLocationPickerPageState
       body: Stack(
         children: [
           GoogleMap(
-            initialCameraPosition: CameraPosition(target: _center, zoom: 11),
+            initialCameraPosition: CameraPosition(target: _center, zoom: 16),
             onMapCreated: (controller) => _mapController = controller,
+            onCameraMoveStarted: _onCameraMoveStarted,
+            onCameraMove: _onCameraMove,
+            onCameraIdle: _onCameraIdle,
             onTap: _selectMapPoint,
+            mapType: _mapType,
+            buildingsEnabled: true,
+            compassEnabled: true,
             markers: {
               if (location != null)
                 Marker(
@@ -191,12 +224,33 @@ class _EmergencyServiceLocationPickerPageState
                 ),
             },
             myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
+            zoomControlsEnabled: true,
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: Center(
+                child: Transform.translate(
+                  offset: const Offset(0, -18),
+                  child: Icon(
+                    Icons.location_pin,
+                    color: AppColors.primary,
+                    size: 40,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
           Positioned(
             top: 12,
             left: 12,
-            right: 12,
+            right: 64,
             child: Column(
               children: [
                 Material(
@@ -267,6 +321,30 @@ class _EmergencyServiceLocationPickerPageState
             ),
           ),
           Positioned(
+            top: 12,
+            right: 12,
+            child: Material(
+              color: Colors.white,
+              elevation: 4,
+              borderRadius: BorderRadius.circular(12),
+              child: IconButton(
+                tooltip: _mapType == MapType.normal
+                    ? 'Show satellite imagery'
+                    : 'Show standard map',
+                onPressed: () => setState(
+                  () => _mapType = _mapType == MapType.normal
+                      ? MapType.satellite
+                      : MapType.normal,
+                ),
+                icon: Icon(
+                  _mapType == MapType.normal
+                      ? Icons.satellite_alt
+                      : Icons.map_outlined,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
             left: 12,
             right: 12,
             bottom: 12,
@@ -278,9 +356,10 @@ class _EmergencyServiceLocationPickerPageState
                   children: [
                     Text(
                       location == null
-                          ? 'Search for a place or tap the map to pin it.'
+                          ? 'Tap the map, or move it until the pin is over any building.'
                           : 'Selected: ${location.latitude.toStringAsFixed(6)}, '
-                                '${location.longitude.toStringAsFixed(6)}',
+                                '${location.longitude.toStringAsFixed(6)}\n'
+                                'Tap the map or move it under the pin to adjust.',
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
