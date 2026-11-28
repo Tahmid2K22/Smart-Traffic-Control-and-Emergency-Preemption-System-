@@ -15,6 +15,7 @@ import '../models/models.dart';
 import '../services/map_search_service.dart';
 import '../services/user_service.dart';
 import 'ambulance_booking_screen.dart';
+import 'emergency_services_page.dart';
 import 'nearby_places_page.dart';
 import 'notifications_page.dart';
 import 'profile_page.dart';
@@ -174,6 +175,10 @@ class _HomePageState extends State<HomePage> {
   void _openPlaces(NearbyPlaceType type) => Navigator.of(
     context,
   ).push(MaterialPageRoute<void>(builder: (_) => NearbyPlacesPage(type: type)));
+
+  void _openEmergencyServices() => Navigator.of(context).push(
+    MaterialPageRoute<void>(builder: (_) => const EmergencyServicesPage()),
+  );
 
   void _onSearchQueryChanged(String query) {
     setState(() => _query = query);
@@ -526,6 +531,12 @@ class _HomePageState extends State<HomePage> {
         color: const Color(0xFF1565C0),
         subtitle: 'Find Nearby',
       ),
+      ServiceItem(
+        icon: Icons.emergency_rounded,
+        label: '999 Services',
+        color: AppColors.primary,
+        subtitle: 'Within 15 km',
+      ),
     ];
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -541,16 +552,14 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           const SizedBox(height: 16),
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
             children: services
                 .map(
-                  (service) => Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.only(
-                        right: service == services.last ? 0 : 12,
-                      ),
-                      child: _serviceCard(context, service),
-                    ),
+                  (service) => SizedBox(
+                    width: (MediaQuery.sizeOf(context).width - 52) / 2,
+                    child: _serviceCard(context, service),
                   ),
                 )
                 .toList(),
@@ -565,6 +574,8 @@ class _HomePageState extends State<HomePage> {
         ? () => _openProtected((_) => const AmbulanceBookingScreen())
         : service.label == 'Pharmacy'
         ? () => _openPlaces(NearbyPlaceType.pharmacies)
+        : service.label == '999 Services'
+        ? _openEmergencyServices
         : () => _openPlaces(NearbyPlaceType.hospitals);
     return InkWell(
       onTap: callback,

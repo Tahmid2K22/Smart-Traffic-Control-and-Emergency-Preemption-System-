@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:velocity_x/velocity_x.dart';
 import '../../constants/colors.dart';
 import '../../services/admin_service.dart';
+import '../../widgets/admin_record_details.dart';
 
 class HospitalsManagementPage extends StatefulWidget {
   const HospitalsManagementPage({super.key});
@@ -341,6 +342,11 @@ class _HospitalCardState extends State<_HospitalCard> {
                   ),
                   12.heightBox,
                 ],
+
+                AdminRecordDetails(
+                  title: 'View all hospital information',
+                  data: data,
+                ),
 
                 if (_loading)
                   const Center(

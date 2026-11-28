@@ -13,6 +13,7 @@ import 'drivers_management_page.dart';
 import 'users_management_page.dart';
 import 'hospitals_management_page.dart';
 import 'intersections_management_page.dart';
+import 'emergency_services_management_page.dart';
 import 'admin_activity_log_page.dart';
 
 class AdminDashboardPage extends StatefulWidget {
@@ -85,6 +86,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
                   const DriversManagementPage(),
                   const UsersManagementPage(),
                   const HospitalsManagementPage(),
+                  const EmergencyServicesManagementPage(),
                   const AdminActivityLogPage(),
                 ],
               ),
@@ -223,6 +225,15 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
               GButton(
                 icon: Icons.local_hospital_rounded,
                 text: 'Hospitals',
+                textStyle: GoogleFonts.poppins(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+              GButton(
+                icon: Icons.emergency_rounded,
+                text: '999',
                 textStyle: GoogleFonts.poppins(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -411,7 +422,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
         crossAxisCount: constraints.maxWidth >= 700 ? 3 : 2,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
-        childAspectRatio: constraints.maxWidth >= 700 ? 1.8 : 1.35,
+        childAspectRatio: constraints.maxWidth >= 700 ? 1.5 : 1.1,
         children: cards.map(_buildStatCard).toList(),
       ),
     );
