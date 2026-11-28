@@ -39,13 +39,24 @@ class _LoginPageState extends State<LoginPage> {
             fallbackEmail: userCredential.user!.email,
           );
           if (profile != null) {
+            final authEmail = userCredential.user!.email?.trim() ?? '';
+            // Heal a stale email column after a confirmed address change;
+            // Auth owns the sign-in email.
+            if (authEmail.isNotEmpty && profile.email.trim() != authEmail) {
+              await UserService.instance.update(
+                userCredential.user!.uid,
+                {'email': authEmail},
+              );
+            }
             final prefs = await SharedPreferences.getInstance();
-            await prefs.setString('userName', profile.displayName);
+            // Cache only real names; 'User' is just a display placeholder.
+            final cachedName = profile.displayName;
+            if (cachedName.isNotEmpty && cachedName != 'User') {
+              await prefs.setString('userName', cachedName);
+            }
             await prefs.setString(
               'userEmail',
-              profile.email.isNotEmpty
-                  ? profile.email
-                  : userCredential.user!.email ?? '',
+              authEmail.isNotEmpty ? authEmail : profile.email,
             );
             await prefs.setString('userPhone', profile.phone);
             await prefs.setString('userCity', profile.city ?? '');

@@ -19,10 +19,30 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
 
-  String _name = 'Loading...';
-  String _email = 'Loading...';
-  String _phone = 'Loading...';
+  // Raw values; placeholders ('No Name', ...) are display-only, never cached
+  // in prefs or written to the database.
+  String _name = '';
+  String _email = '';
+  String _phone = '';
   String? _city;
+  bool _loaded = false;
+
+  static const Set<String> _placeholderValues = {
+    'Loading...',
+    'No Name',
+    'No Email',
+    'No Phone',
+    'User',
+  };
+
+  String get _displayName =>
+      _name.isNotEmpty ? _name : (_loaded ? 'No Name' : 'Loading...');
+
+  String get _displayEmail =>
+      _email.isNotEmpty ? _email : (_loaded ? 'No Email' : 'Loading...');
+
+  String get _displayPhone =>
+      _phone.isNotEmpty ? _phone : (_loaded ? 'No Phone' : 'Loading...');
 
 
   late TextEditingController _nameCtrl;
@@ -38,56 +58,74 @@ class _ProfilePageState extends State<ProfilePage> {
     _loadUserData();
   }
 
+  /// Reads a cached pref, treating legacy placeholder junk ('No Name', etc.)
+  /// as empty so it never pre-fills the edit form or reaches the database.
+  String _cached(SharedPreferences prefs, String key) {
+    final value = prefs.getString(key)?.trim() ?? '';
+    return _placeholderValues.contains(value) ? '' : value;
+  }
+
+  Future<void> _cache(String key, String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (value.isEmpty) {
+      await prefs.remove(key);
+    } else {
+      await prefs.setString(key, value);
+    }
+  }
+
   Future<void> _loadUserData() async {
     final prefs = await SharedPreferences.getInstance();
     final user = FirebaseAuth.instance.currentUser;
 
-    var name = prefs.getString('userName')?.trim() ?? '';
-    var email =
-        prefs.getString('userEmail')?.trim() ?? user?.email?.trim() ?? '';
-    var phone = prefs.getString('userPhone')?.trim() ?? '';
+    // Auth email is the sign-in source of truth; prefs only cover signed-out
+    // or pre-fetch states.
+    var name = _cached(prefs, 'userName');
+    var email = user?.email?.trim() ?? _cached(prefs, 'userEmail');
+    var phone = _cached(prefs, 'userPhone');
     var city = prefs.getString('userCity')?.trim();
 
     if (user != null) {
       try {
         final profile = await UserService.instance.fetch(user.uid);
         if (profile != null) {
-          name = profile.name.trim().isNotEmpty
-              ? profile.name.trim()
-              : profile.fullName.trim().isNotEmpty
-              ? profile.fullName.trim()
-              : name.isNotEmpty
-              ? name
-              : user.displayName?.trim() ?? '';
-          email = profile.email.trim().isNotEmpty
-              ? profile.email.trim()
-              : user.email?.trim() ?? email;
-          phone = profile.phone.trim().isNotEmpty ? profile.phone.trim() : phone;
+          if (profile.name.trim().isNotEmpty) {
+            name = profile.name.trim();
+          } else if (profile.fullName.trim().isNotEmpty) {
+            name = profile.fullName.trim();
+          } else if (name.isEmpty) {
+            name = user.displayName?.trim() ?? '';
+          }
+          if (email.isEmpty && profile.email.trim().isNotEmpty) {
+            email = profile.email.trim();
+          }
+          if (profile.phone.trim().isNotEmpty) phone = profile.phone.trim();
           final cityFromProfile = profile.city?.trim() ?? '';
           if (cityFromProfile.isNotEmpty) city = cityFromProfile;
-        } else {
-          name = name.isNotEmpty ? name : user.displayName?.trim() ?? '';
-          email = email.isNotEmpty ? email : user.email?.trim() ?? '';
+        } else if (name.isEmpty) {
+          name = user.displayName?.trim() ?? '';
         }
       } catch (error) {
         debugPrint('Failed to fetch profile: $error');
       }
     }
 
+    // Cache only real values so placeholders never come back from prefs.
+    await _cache('userName', name);
+    await _cache('userEmail', email);
+    await _cache('userPhone', phone);
+
     if (!mounted) return;
     setState(() {
-      _name = name.isNotEmpty ? name : 'No Name';
-      _email = email.isNotEmpty ? email : 'No Email';
-      _phone = phone.isNotEmpty ? phone : 'No Phone';
+      _name = name;
+      _email = email;
+      _phone = phone;
       _city = city?.isNotEmpty == true ? city : null;
+      _loaded = true;
       _nameCtrl.text = _name;
       _emailCtrl.text = _email;
       _phoneCtrl.text = _phone;
     });
-
-    await prefs.setString('userName', _name);
-    await prefs.setString('userEmail', _email);
-    await prefs.setString('userPhone', _phone);
   }
 
   @override
@@ -188,7 +226,7 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
               child: Center(
                 child: Text(
-                  _initials(_name),
+                  _initials(_displayName),
                   style: GoogleFonts.poppins(
                     fontSize: 26,
                     fontWeight: FontWeight.w700,
@@ -203,7 +241,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    _name,
+                    _displayName,
                     style: GoogleFonts.poppins(
                       fontSize: 18,
                       fontWeight: FontWeight.w700,
@@ -212,7 +250,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   4.heightBox,
                   Text(
-                    _email,
+                    _displayEmail,
                     style: GoogleFonts.poppins(
                       fontSize: 12,
                       color: Colors.white.withValues(alpha: 0.85),
@@ -263,20 +301,20 @@ class _ProfilePageState extends State<ProfilePage> {
                 _infoRow(
                   icon: Icons.person_outline_rounded,
                   label: 'Full Name',
-                  value: _name,
+                  value: _displayName,
                   isFirst: true,
                 ),
                 _divider(),
                 _infoRow(
                   icon: Icons.phone_outlined,
                   label: 'Phone Number',
-                  value: _phone,
+                  value: _displayPhone,
                 ),
                 _divider(),
                 _infoRow(
                   icon: Icons.email_outlined,
                   label: 'Email Address',
-                  value: _email,
+                  value: _displayEmail,
                 ),
                 _divider(),
                 _infoRow(
@@ -437,10 +475,12 @@ class _ProfilePageState extends State<ProfilePage> {
 
   void _showUpdateDialog(BuildContext context) {
 
+    // Prefill raw values; placeholders are display-only.
     _nameCtrl.text = _name;
     _emailCtrl.text = _email;
     _phoneCtrl.text = _phone;
     String? tempCity = _city;
+    bool saving = false;
 
     showModalBottomSheet(
       context: context,
@@ -512,25 +552,32 @@ class _ProfilePageState extends State<ProfilePage> {
                   ),
                   12.heightBox,
                   DropdownButtonFormField<String>(
-                    initialValue: bdDistricts.contains(tempCity)
-                        ? tempCity
-                        : null,
+                    initialValue: tempCity ?? '',
                     hint: Text(
                       'Select City (District)',
                       style: GoogleFonts.poppins(fontSize: 13),
                     ),
-                    items: bdDistricts.map((String district) {
-                      return DropdownMenuItem<String>(
-                        value: district,
-                        child: Text(
-                          district,
-                          style: GoogleFonts.poppins(fontSize: 14),
-                        ),
-                      );
-                    }).toList(),
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: '',
+                        child: Text('Not set'),
+                      ),
+                      ...bdDistricts.map((String district) {
+                        return DropdownMenuItem<String>(
+                          value: district,
+                          child: Text(
+                            district,
+                            style: GoogleFonts.poppins(fontSize: 14),
+                          ),
+                        );
+                      }),
+                    ],
                     onChanged: (String? newValue) {
                       setModalState(() {
-                        tempCity = newValue;
+                        tempCity =
+                            newValue == null || newValue.isEmpty
+                            ? null
+                            : newValue;
                       });
                     },
                     decoration: InputDecoration(
@@ -570,80 +617,63 @@ class _ProfilePageState extends State<ProfilePage> {
                     width: double.infinity,
                     height: 50,
                     child: ElevatedButton(
-                      onPressed: () async {
+                      onPressed: saving
+                        ? null
+                        : () async {
+                            if (saving) return;
+                            saving = true;
+                            setModalState(() {});
 
-                        final nav = Navigator.of(context);
-                        final messenger = ScaffoldMessenger.of(context);
+                            final nav = Navigator.of(context);
+                            final messenger = ScaffoldMessenger.of(context);
+                            final sheetRoute = ModalRoute.of(context);
 
-                        final user = FirebaseAuth.instance.currentUser;
-
-                        setState(() {
-                          _name = _nameCtrl.text.trim().isEmpty
-                              ? _name
-                              : _nameCtrl.text.trim();
-                          _email = _emailCtrl.text.trim().isEmpty
-                              ? _email
-                              : _emailCtrl.text.trim();
-                          _phone = _phoneCtrl.text.trim().isEmpty
-                              ? _phone
-                              : _phoneCtrl.text.trim();
-                          _city = tempCity ?? _city;
-                        });
-
-
-                        final prefs = await SharedPreferences.getInstance();
-                        await prefs.setString('userName', _name);
-                        await prefs.setString('userEmail', _email);
-                        await prefs.setString('userPhone', _phone);
-                        if (_city != null) {
-                          await prefs.setString('userCity', _city!);
-                        }
-
-
-                        if (user != null) {
-                          try {
-                            await UserService.instance.update(user.uid, {
-                              'name': _name,
-                              'full_name': _name,
-                              'email': _email,
-                              'phone': _phone,
-                              'city': _city,
-                            });
-                            await user.updateDisplayName(_name);
-                          } catch (e) {
-                            debugPrint(
-                              'Failed to update profile: $e',
+                            final result = await _saveProfile(
+                              tempCity: tempCity,
                             );
-                            if (mounted) {
+
+                            if (result.error != null) {
+                              saving = false;
+                              // The sheet may have been dismissed while
+                              // saving; only touch it if it is still around.
+                              if (sheetRoute?.isActive ?? false) {
+                                setModalState(() {});
+                              }
                               messenger.showSnackBar(
-                                const SnackBar(
+                                SnackBar(
                                   content: Text(
-                                    'Could not save profile to the database.',
+                                    result.error!,
+                                    style: GoogleFonts.poppins(fontSize: 13),
                                   ),
                                   backgroundColor: AppColors.warning,
                                 ),
                               );
                               return;
                             }
-                          }
-                        }
 
-                        if (!mounted) return;
-                        nav.pop();
-                        messenger.showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Profile updated successfully!',
-                              style: GoogleFonts.poppins(fontSize: 13),
-                            ),
-                            backgroundColor: const Color(0xFF2E7D32),
-                            behavior: SnackBarBehavior.floating,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
-                        );
-                      },
+                            // Close the sheet only if the user didn't
+                            // dismiss it while the save was running.
+                            if (sheetRoute?.isActive ?? false) {
+                              nav.pop();
+                            }
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  result.emailVerificationSent
+                                      ? 'Profile saved. Check your new email '
+                                          'inbox to confirm the address '
+                                          'change.'
+                                      : 'Profile updated successfully!',
+                                  style: GoogleFonts.poppins(fontSize: 13),
+                                ),
+                                backgroundColor: const Color(0xFF2E7D32),
+                                behavior: SnackBarBehavior.floating,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                            );
+                          },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primary,
                         foregroundColor: AppColors.white,
@@ -668,6 +698,110 @@ class _ProfilePageState extends State<ProfilePage> {
         },
       ),
     );
+  }
+
+  /// Validates the form, pushes the changes to the backends, and only then
+  /// commits to local state and prefs. Returns an error message on failure;
+  /// [result.error] null means success.
+  Future<({String? error, bool emailVerificationSent})> _saveProfile({
+    required String? tempCity,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    final newName = _nameCtrl.text.trim();
+    final newPhone = _phoneCtrl.text.trim();
+    final newEmail = _emailCtrl.text.trim();
+    final newCity = tempCity == null || tempCity.isEmpty ? null : tempCity;
+
+    // Blank fields keep their current value.
+    final name = newName.isEmpty ? _name : newName;
+    final phone = newPhone.isEmpty ? _phone : newPhone;
+    final email = newEmail.isEmpty ? _email : newEmail;
+
+    if (phone.isNotEmpty) {
+      final digits = phone.replaceAll(RegExp(r'\D'), '');
+      if (digits.length < 6 || digits.length > 15) {
+        return (
+          error: 'Please enter a valid phone number.',
+          emailVerificationSent: false,
+        );
+      }
+    }
+
+    final emailChanged =
+        user != null && email.isNotEmpty && email != (user.email?.trim() ?? '');
+    if (emailChanged &&
+        !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      return (
+        error: 'Please enter a valid email address.',
+        emailVerificationSent: false,
+      );
+    }
+
+    bool emailVerificationSent = false;
+    if (user != null) {
+      // Auth owns the sign-in email, so confirm the new address first. The
+      // Auth email only changes after the user clicks the verification link,
+      // which is why local state keeps showing the current address.
+      if (emailChanged) {
+        try {
+          await user.verifyBeforeUpdateEmail(email);
+          emailVerificationSent = true;
+        } on FirebaseAuthException catch (e) {
+          debugPrint('Failed to start email change: $e');
+          return (
+            error: e.message ?? 'Could not update the email address.',
+            emailVerificationSent: false,
+          );
+        } catch (e) {
+          debugPrint('Failed to start email change: $e');
+          return (
+            error: 'Could not update the email address.',
+            emailVerificationSent: false,
+          );
+        }
+      }
+
+      try {
+        await UserService.instance.update(user.uid, {
+          if (name.isNotEmpty) 'name': name,
+          if (phone.isNotEmpty) 'phone': phone,
+          'city': newCity,
+        });
+      } catch (e) {
+        debugPrint('Failed to update profile: $e');
+        return (
+          error: 'Could not save profile to the database.',
+          emailVerificationSent: false,
+        );
+      }
+
+      // Best-effort; a stale Auth display name is cosmetic.
+      if (name.isNotEmpty) {
+        try {
+          await user.updateDisplayName(name);
+        } catch (e) {
+          debugPrint('Failed to update display name: $e');
+        }
+      }
+    }
+
+    // Remote writes succeeded; commit locally.
+    await _cache('userName', name);
+    await _cache('userEmail', email);
+    await _cache('userPhone', phone);
+    await _cache('userCity', newCity ?? '');
+
+    if (mounted) {
+      setState(() {
+        _name = name;
+        _email = email;
+        _phone = phone;
+        _city = newCity;
+        _loaded = true;
+      });
+    }
+    return (error: null, emailVerificationSent: emailVerificationSent);
   }
 
   Widget _editField({
@@ -781,11 +915,24 @@ class _ProfilePageState extends State<ProfilePage> {
                 child: ElevatedButton(
                   onPressed: () async {
                     final navigator = Navigator.of(context);
+                    final messenger = ScaffoldMessenger.of(context);
                     navigator.pop();
+                    try {
+                      await FirebaseAuth.instance.signOut();
+                    } catch (e) {
+                      debugPrint('Failed to sign out: $e');
+                      messenger.showSnackBar(
+                        const SnackBar(
+                          content: Text('Could not log out. Please try again.'),
+                          backgroundColor: AppColors.warning,
+                        ),
+                      );
+                      return;
+                    }
+                    // Only drop the cached user data once sign-out succeeded.
                     final prefs = await SharedPreferences.getInstance();
                     await prefs.clear();
                     // Back to public home.
-                    await FirebaseAuth.instance.signOut();
                     if (navigator.mounted) {
                       navigator.popUntil((route) => route.isFirst);
                     }
@@ -817,10 +964,16 @@ class _ProfilePageState extends State<ProfilePage> {
 
   // get initials
   String _initials(String name) {
-    final parts = name.trim().split(' ');
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return '?';
     if (parts.length >= 2) {
       return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
     }
-    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
+    final word = parts.first;
+    return word.substring(0, word.length >= 2 ? 2 : 1).toUpperCase();
   }
 }

@@ -1,3 +1,4 @@
+  //  Registration 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -16,7 +17,7 @@ class HospitalService {
   FirebaseFirestore get _firestore =>
       _providedFirestore ?? FirebaseFirestore.instance;
 
-  // ── Registration ───────────────────────────────────────────────────────────
+  //  Registration 
 
   Future<UserCredential> registerHospitalAccount({
     required String name,
